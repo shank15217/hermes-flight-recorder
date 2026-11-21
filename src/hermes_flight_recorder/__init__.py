@@ -8,7 +8,7 @@ command, no hooks, no tools.
 Design and attribution: see README, NOTICE and docs/design.md.
 """
 
-__version__ = "0.2.0.dev2"
+__version__ = "0.2.0.dev3"
 
 from .commands import USAGE, handle_statefile
 from .records import (

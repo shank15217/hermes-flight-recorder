@@ -147,7 +147,12 @@ def _decode_one(f, *, tolerate_torn: bool = False) -> Record | None:
         if tolerate_torn:
             return None
         raise RecordFormatError("missing body terminator after raw body")
-    return Record.from_header(header, body)
+    try:
+        return Record.from_header(header, body)
+    except (ValueError, KeyError, TypeError) as exc:
+        # A bad header shape is corruption, not a torn tail. Keep the raw bytes
+        # in the message rather than letting a bare ValueError escape (F3).
+        raise RecordFormatError(f"invalid record header: {exc}") from exc
 
 
 def iter_records(f, *, tolerate_torn: bool = False) -> Iterator[Record]:
@@ -225,9 +230,7 @@ def _flush(pending: list[Record], step: Record | None,
             rest.append(r)
         elif r.kind == "result":
             ctx.append(r)
-    for r in pending:
-        if r.kind != "result" and seen(r):
-            ctx.append(r)
+    ctx.extend(r for r in pending if r.kind != "result" and seen(r))
     return rest
 
 

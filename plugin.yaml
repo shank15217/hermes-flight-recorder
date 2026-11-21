@@ -2,7 +2,7 @@
 # (~/.hermes/plugins/hermes-flight-recorder/) or via a pip entry point; the
 # gateway does not load project-local ./.hermes/plugins/ directories.
 name: hermes-flight-recorder
-version: 0.2.0.dev2
+version: 0.2.0.dev3
 manifest_version: 2
 api_version: 1
 license: MIT

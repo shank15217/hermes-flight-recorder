@@ -165,3 +165,23 @@ def test_statefile_returns_none_for_disabled_or_unknown(tmp_path):
     r.tag("s1")
     r.untag("s1")
     assert r.statefile("s1") is None
+
+
+def test_non_boolean_enabled_is_rejected(tmp_path):
+    r = make_reg(tmp_path)
+    r.tag("s1")
+    d = json.loads(r.path.read_text())
+    d["sessions"]["s1"]["enabled"] = "false"
+    r.path.write_text(json.dumps(d))
+    with pytest.raises(RegistryError, match="enabled must be a boolean"):
+        r.get("s1")
+
+
+def test_malformed_session_entry_is_registryerror(tmp_path):
+    r = make_reg(tmp_path)
+    r.tag("s1")
+    d = json.loads(r.path.read_text())
+    d["sessions"]["s1"] = "oops"
+    r.path.write_text(json.dumps(d))
+    with pytest.raises(RegistryError, match="malformed session entry"):
+        r.get("s1")

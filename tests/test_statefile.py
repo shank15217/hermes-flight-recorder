@@ -101,3 +101,14 @@ def test_lru_eviction_closes_handles(tmp_path, monkeypatch):
     first.append("message", b"y")  # a held reference still works
     assert first.resync_count == scans, "reopening must not rescan"
     assert [r.n for r in read_records(paths[0])] == [1, 2]
+
+
+def test_step_records_require_an_explicit_upto(tmp_path):
+    p = tmp_path / "s.state"
+    append_record(p, "message", b"a")
+    with pytest.raises(ValueError, match="explicit upto"):
+        append_record(p, "step", id="s1")
+    r = append_record(p, "step", id="s1", upto=1)
+    assert r.upto == 1
+    assert read_records(p)[1].upto == 1
+    assert read_records(p)[0].upto == 0  # non-step records carry no upto

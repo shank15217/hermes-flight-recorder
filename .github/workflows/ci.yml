@@ -20,3 +20,5 @@ jobs:
       - run: python -m pytest
       - run: python -m compileall -q src
       - run: ruff check src tests
+      - run: ruff check --select B,S,SIM,C4,PERF src
+      - run: mypy --explicit-package-bases src/hermes_flight_recorder

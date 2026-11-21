@@ -3,10 +3,11 @@
 > **Status: step 2 of 7, review fixes landed.** The record format, deterministic context
 > rebuild, a sticky per-session registry and the `/statefile on|off|status` command are
 > implemented and tested. Append is O(1) via one cached open handle per statefile, and statefile
-> paths are derived from the session id (both from Mainplane's `statefile` design). **No hooks are
-> registered yet** — a tagged session does not yet mirror its turns into the `.state` file (that is
-> step 3). Untagged sessions are untouched. See [docs/design.md](docs/design.md) for the plan and
-> §12 for the review resolution.
+> paths are derived from the session id (both from Mainplane's `statefile` design). Both review
+> fix passes are in: domain errors, strict `enabled` parsing, explicit step `upto`, mypy + extended
+> ruff CI gates. **No hooks are registered yet** — a tagged session does not yet mirror its turns
+> into the `.state` file (that is step 3). Untagged sessions are untouched. See
+> [docs/design.md](docs/design.md) for the plan and §12 for the review resolution.
 
 Opt-in, [Mainplane](https://github.com/mainplane-ai/mainplane)-style **append-only statefile
 sessions** for [Hermes Agent](https://hermes-agent.nousresearch.com/).

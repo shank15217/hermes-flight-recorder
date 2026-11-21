@@ -82,3 +82,23 @@ def test_handler_failure_becomes_reply_not_exception(tmp_path, monkeypatch):
     assert isinstance(out, str)
     assert "/statefile: error:" in out
     assert "disk full" in out
+
+
+def test_handler_resolves_data_dir_on_every_call(tmp_path, monkeypatch):
+    mod, _ = _fake_storage(monkeypatch, tmp_path)
+    homes = [tmp_path / "home-a", tmp_path / "home-b"]
+    calls = []
+
+    def data_dir(name):
+        calls.append(name)
+        return homes[min(len(calls) - 1, len(homes) - 1)]
+
+    monkeypatch.setattr(mod, "plugin_data_dir", data_dir)
+    ctx = FakeCtx()
+    register(ctx)
+    handler = ctx.commands["statefile"][0]
+    handler("on", session_id="s1")
+    handler("on", session_id="s2")
+    assert len(calls) == 2
+    assert (homes[0] / "registry.json").is_file()
+    assert (homes[1] / "registry.json").is_file()

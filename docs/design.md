@@ -167,8 +167,22 @@ Given the chain of records, produce API context order:
 | `on_session_delete` | `session_id, reason, profile, deleted_ids, sessions_dir` | archive, don't silently delete, the `.state` file |
 | `on_session_end` | `session_id, completed, interrupted, model, platform` | flush / fsync |
 
-Privacy: `post_tool_call` results can contain secrets. Open question (§10) — redaction policy
-must be decided before v0.1 ships.
+**F7 — hard gate for step 3.** `post_tool_call` results and transcripts can contain secrets.
+Hermes' plugin guide requires running saved text through `ctx.redact_text(text, force=True)`
+before storing it; step 3 MUST do this at the point where a hook's payload becomes a record
+body, before `append_record`. Two further facts from the live docs (verified against this
+build) constrain the design:
+
+- `post_api_request` / `post_llm_call` `request` and `response` kwargs are **sanitized,
+  size-capped JSON views** (sensitive keys redacted, long strings truncated), and `usage` is a
+  *plain token-summary dict* — not a raw provider payload. So "keep the raw bytes" records a
+  redacted, truncated view, and cache fields are not guaranteed to be present.
+- Auxiliary LLM calls (titling, compression, MoA, vision) fire `pre_auxiliary_call` /
+  `post_auxiliary_call`, **not** `pre/post_api_request`. Step 4's accounting must not mistake
+  them for session steps.
+
+Step 3 must therefore define a single redaction/serialization boundary and record what it
+actually received, not what it assumes the provider sent.
 
 ## 8. `cold_limit` rollover
 
@@ -234,12 +248,23 @@ Resolved in this pass:
 | F2 registry path traversal | `_statefile_path()` derives from the session id, containment-checked; stored `statefile` ignored on every read |
 | F5 torn final write (came with Mainplane's `Open`) | `scan_records()` drops a torn tail; `statefile.py` truncates it on open; `read_records(tolerate_torn_tail=True)` for direct callers; default stays strict |
 
-Regression tests live in `tests/test_statefile.py` and `tests/test_registry.py`. `build_context`
+Regression tests live in `tests/test_statefile.py`, `tests/test_registry.py`,
+`tests/test_records.py` and `tests/test_build_fidelity.py`. `build_context`
 still matches a literal port of Mainplane's Go `Build()` on 3,000 randomized chains (0 mismatches),
 and 8-thread concurrent appends still produce a clean 1..400 sequence.
 
-Still open, deliberately deferred: F3 (corrupt inputs leak `ValueError`/`TypeError`), F4
-(`bool("false")` re-enables a disabled session), F6 (`upto` must be captured at prompt-build time,
-not append time), F7 (`ctx.redact_text()` and the fact that hook payloads are sanitized/size-capped),
-F8 (handler not yet executed inside the real plugin host under multiplex profiles), plus the
-type-checking and CI suggestions from the review.
+### Second fix pass
+
+| Finding | Resolution |
+| --- | --- |
+| F3 corrupt inputs leak raw exceptions | `_decode_one` wraps `Record.from_header`, `_entry_from` wraps `SessionEntry.from_dict`; bad headers/entries now raise `RecordFormatError` / `RegistryError` |
+| F4 `bool("false")` re-enables a session | `enabled` must be a real `bool`; a string is rejected instead of silently enabling |
+| F6 `upto` captured at the wrong time | `step` records now **require** an explicit `upto` (`build_context()`'s second return value, captured at prompt-build time); non-step records carry no `upto` at all |
+| F7 secret-bearing / sanitized hook payloads | documented as a **hard gate for step 3** in §7: `ctx.redact_text(..., force=True)` at the serialization boundary, plus the facts that `request`/`response` are sanitized + size-capped and `usage` is a plain token-summary dict. No code can fix this before hooks exist. |
+| F8 profile/host resolution | unit test now proves the handler calls `plugin_data_dir()` on **every** invocation (no caching across profile switches). Remaining gate: execute the handler inside a real plugin-host / named-profile session — still unverified, do not rely on it until tested. |
+| mypy / PERF401 / CI | the two `fcntl = None` errors fixed; `_flush` uses `list.extend`; mypy and `ruff --select B,S,SIM,C4,PERF` added to CI |
+| Test gaps | the differential `Build()` port and the corrupt-input, `enabled`, step-`upto` and concurrency probes are now committed tests |
+
+**Still open:** only F8's real plugin-host/multiplex execution (needs step 3's hook wiring to
+exercise), plus the design decision on whether `read_records` should default to tolerating a torn
+tail rather than requiring the opt-in flag. No other review finding remains unaddressed.

@@ -23,7 +23,7 @@ from pathlib import Path
 try:  # advisory lock is POSIX-only; Windows falls back to unlocked writes
     import fcntl
 except ImportError:  # pragma: no cover - platform dependent
-    fcntl = None
+    fcntl = None  # type: ignore[assignment]
 
 from .records import new_id
 from .statefile import StateFile, append_record, get_statefile
@@ -72,10 +72,13 @@ class SessionEntry:
 
     @classmethod
     def from_dict(cls, d: dict) -> SessionEntry:
+        enabled = d.get("enabled", True)
+        if not isinstance(enabled, bool):
+            raise RegistryError("enabled must be a boolean")
         return cls(
             session_id=str(d["session_id"]),
             type=str(d.get("type", TAGGED_SESSION_TYPE)),
-            enabled=bool(d.get("enabled", True)),
+            enabled=enabled,
             statefile=str(d.get("statefile", "")),
             agent_id=str(d.get("agent_id", "")),
             chain=tuple(str(x) for x in d.get("chain", ())),
@@ -85,6 +88,14 @@ class SessionEntry:
             cold_limit=int(d.get("cold_limit", DEFAULT_COLD_LIMIT)),
             instructions=str(d.get("instructions", "")),
         )
+
+
+def _entry_from(raw) -> SessionEntry:
+    """Parse one registry value; malformed data is a RegistryError, not a raw TypeError (F3)."""
+    try:
+        return SessionEntry.from_dict(raw)
+    except (ValueError, KeyError, TypeError, AttributeError) as exc:
+        raise RegistryError(f"malformed session entry: {exc}") from exc
 
 
 def _check_session_id(session_id: str) -> None:
@@ -189,7 +200,7 @@ class Registry:
             return None
         with self._lock():
             raw = self._load()["sessions"].get(session_id)
-        return self._bind(SessionEntry.from_dict(raw)) if raw is not None else None
+        return self._bind(_entry_from(raw)) if raw is not None else None
 
     def is_tagged(self, session_id: str) -> bool:
         entry = self.get(session_id)
@@ -200,7 +211,7 @@ class Registry:
             return []
         with self._lock():
             sessions = self._load()["sessions"]
-        entries = [self._bind(SessionEntry.from_dict(v)) for v in sessions.values()]
+        entries = [self._bind(_entry_from(v)) for v in sessions.values()]
         return sorted((e for e in entries if e.enabled),
                       key=lambda e: e.created_at)
 
@@ -213,7 +224,7 @@ class Registry:
             data = self._load()
             raw = data["sessions"].get(session_id)
             if raw is not None:
-                entry = self._bind(SessionEntry.from_dict(raw))
+                entry = self._bind(_entry_from(raw))
                 if not entry.enabled:
                     entry = replace(entry, enabled=True)
                     data["sessions"][session_id] = entry.to_dict()

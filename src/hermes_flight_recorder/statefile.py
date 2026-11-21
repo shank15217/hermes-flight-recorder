@@ -24,7 +24,7 @@ from pathlib import Path
 try:  # advisory lock is POSIX-only; Windows falls back to unlocked appends
     import fcntl
 except ImportError:  # pragma: no cover - platform dependent
-    fcntl = None
+    fcntl = None  # type: ignore[assignment]
 
 from .records import (
     KINDS,
@@ -130,9 +130,21 @@ class StateFile:
     def append(self, kind: str, body=b"", *, id: str | None = None,
                step: str = "", upto: int | None = None,
                ts: str | None = None, **extra) -> Record:
-        """Append one record. O(1) in the steady state."""
+        """Append one record. O(1) in the steady state.
+
+        ``upto`` is required for ``step`` records: it must be the highest ``n``
+        visible when that step's *prompt was built* (``build_context()``'s
+        second return value), captured before the step's blocks and results
+        are appended. Auto-filling it at append time would include them and
+        mis-order context (review finding F6).
+        """
         if kind not in KINDS:
             raise ValueError(f"unknown record kind: {kind!r}")
+        if kind == "step" and upto is None:
+            raise ValueError(
+                "step records require an explicit upto (capture it from "
+                "build_context() at prompt-build time)")
+        upto_val = 0 if upto is None else int(upto)
         raw = _as_body(body)
         with self._lock:
             for _attempt in range(3):
@@ -148,7 +160,7 @@ class StateFile:
                         body=raw,
                         id=id or new_id(),
                         step=step,
-                        upto=self._n if upto is None else int(upto),
+                        upto=upto_val,
                         ts=ts or utc_now(),
                         extra=extra,
                     )
@@ -213,6 +225,9 @@ def get_statefile(path) -> StateFile:
 def append_record(path, kind: str, body=b"", *, id: str | None = None,
                   step: str = "", upto: int | None = None,
                   ts: str | None = None, **extra) -> Record:
-    """Append one record via the cached open handle (O(1))."""
+    """Append one record via the cached open handle (O(1)).
+
+    ``step`` records must pass ``upto`` explicitly -- see ``StateFile.append``.
+    """
     return get_statefile(path).append(
         kind, body, id=id, step=step, upto=upto, ts=ts, **extra)

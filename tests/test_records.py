@@ -29,13 +29,15 @@ def rec(n, kind, *, id="", step="", upto=0, body=b"", **extra):
 
 # --- on-disk format -------------------------------------------------------
 
-def test_append_assigns_monotonic_n_and_auto_upto(tmp_path):
+def test_append_assigns_monotonic_n_and_step_upto_is_explicit(tmp_path):
     p = tmp_path / "s.state"
     r1 = append_record(p, "message", "hello")
     r2 = append_record(p, "text", b"assistant", step=r1.id)
-    r3 = append_record(p, "step", id="s1")
+    with pytest.raises(ValueError, match="explicit upto"):
+        append_record(p, "step", id="s1")
+    r3 = append_record(p, "step", id="s1", upto=2)
     assert (r1.n, r2.n, r3.n) == (1, 2, 3)
-    assert (r1.upto, r2.upto, r3.upto) == (0, 1, 2)
+    assert (r1.upto, r2.upto, r3.upto) == (0, 0, 2)
     assert [r.kind for r in read_records(p)] == ["message", "text", "step"]
     assert read_records(p)[2].id == "s1"
 
@@ -192,10 +194,23 @@ def test_statefile_end_to_end_context(tmp_path):
     sf.append("config", b'{"model":"x"}')
     sf.append("message", "what is 2+2?")
     sf.append("text", "four", step="s1")
-    sf.append("step", id="s1")
+    sf.append("step", id="s1", upto=4)
     sf.append("result", "four", step="s1")
     ctx, upto = sf.context()
     assert upto == 6
     assert [r.kind for r in ctx] == ["message", "text", "step", "result"]
     assert len(sf) == 6
     assert sf.last_n == 6
+
+
+def test_corrupt_header_shapes_raise_recordformaterror(tmp_path):
+    p = tmp_path / "bad.state"
+    for raw in (
+        b'{"n":1,"kind":"wat","len":1}\na\n',
+        b'{"n":"abc","kind":"message","len":1}\na\n',
+        b'{"kind":"message","len":1}\na\n',
+        b'{"n":1,"kind":"message","len":true}\na\n',
+    ):
+        p.write_bytes(raw)
+        with pytest.raises(RecordFormatError):
+            read_records(p)
