@@ -1,0 +1,10 @@
+# Scaffold only. register(ctx) currently registers nothing — see docs/design.md.
+# Once v0.1 lands, install as a USER plugin (~/.hermes/plugins/); the gateway does
+# not load project-local ./.hermes/plugins/ directories.
+name: hermes-flight-recorder
+version: "0.0.0"
+description: >-
+  Opt-in Mainplane-style append-only statefile sessions for Hermes.
+  SCAFFOLD: no hooks, tools or commands are registered yet.
+provides_tools: []
+provides_hooks: []

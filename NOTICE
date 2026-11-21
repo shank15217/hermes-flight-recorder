@@ -1,0 +1,36 @@
+hermes-flight-recorder
+Copyright (c) 2026 shank15217
+
+ATTRIBUTION — PRIOR ART
+
+This project is an independent implementation of design ideas first published in:
+
+    Mainplane — https://github.com/mainplane-ai/mainplane
+    Author: @Alezander9 and the Mainplane contributors
+    License: MIT
+
+Ideas attributed to Mainplane (see docs/prior-art.md for the source-level mapping):
+
+  * Append-only ".state" record files (JSON header line + raw body of exactly len bytes,
+    never escaped) as the single source of truth for an agent session.
+  * Deterministic rebuild of API context from time-ordered records, with results placed
+    directly after the step that produced them and unclosed blocks dropped.
+  * Agents as durable identities over a chain of sessions, with per-session prompt snapshots
+    and instructions that hot-reload into the live session.
+  * "cold_limit" rollover: start a new session when the prompt cache is cold and the session
+    is past a token budget, rather than only at a hard context limit.
+  * Handoff: the new session is told where the old session's log lives and retrieves the
+    context it needs.
+  * A deliberately restricted tool surface, with skill files as the capability extension
+    point.
+
+No source code from Mainplane is incorporated into this project. Mainplane is written in Go;
+this project is original Python built on Hermes Agent's public plugin API. Both projects are
+licensed under the MIT License; a copy of the MIT terms is in LICENSE for this project's own
+code.
+
+"Mainplane" is used here only as a descriptive nod and as an internal session tag value; no
+affiliation, endorsement, sponsorship or trademark claim is implied. The tag value is a local
+implementation detail and may be renamed.
+
+We are grateful to @Alezander9 for publishing the design and source under a permissive license.
