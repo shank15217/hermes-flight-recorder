@@ -179,6 +179,8 @@ sessions only:
 | `on_session_reset` | `system` marker |
 | `post_compaction` | `system` marker with kind/reason/token counts |
 | `on_session_delete` | `system` marker (reason/profile only), then **archives** the registry entry: the `.state` file is kept for audit, the entry is dropped so the registry cannot grow without bound (review W2) |
+| `on_session_end` | closes an unfinished turn (`error` + `step`) when `interrupted`/`failed`, so its `call` blocks are not dropped (W1) |
+| `on_session_open` | binds a pending reset handoff to the newly opened session (W4) |
 
 `pre_api_request` / `post_api_request` are deliberately **not** wired yet: usage and cache
 accounting are step 4. A single `step` per Hermes turn (rather than per provider API request)
@@ -303,7 +305,7 @@ write no records. `data_dir()` resolves `plugin_data_dir()` on **every call** (F
 across profile switches). `step` records carry the `upto` captured at prompt-build time (F6).
 Hook failures are logged and swallowed, so a plugin can never break a session.
 
-Verified: `hermes plugins doctor --ci` reports **6 hooks / 0 tools**; `hermes plugins
+Verified: `hermes plugins doctor --ci` reports **8 hooks / 0 tools**; `hermes plugins
 validate` passes incl. security scan; a real `HERMES_HOME` with the plugin installed and
 enabled fired `pre_llm_call` / `post_tool_call` / `post_llm_call` / `on_session_reset`
 through Hermes' own `invoke_hook` and produced
@@ -315,6 +317,8 @@ rebuild and real redaction of an `sk-` key.
   `plugins.isolation: host` / multiplex profiles. `doctor` and `validate` confirm
   registration under host isolation, and in-process dispatch is fully verified, but an
   ad-hoc probe cannot launch the PM-managed host child. Needs a live gateway session.
+  (Source check: `on_session_delete` is dispatched under `set_hermes_home_override(store_home)`,
+  so the owning profile's `plugin_data_dir()` is bound for that hook.)
 - The design decision on whether `read_records` should default to tolerating a torn tail.
 - Step 4's cache-field measurement (the endpoint to measure against must be supplied).
 
@@ -334,3 +338,24 @@ optional `deleted_ids`, dispatched under the owning profile's home. The hook app
 drops the registry entries in a single `archive_many` pass, keeping the `.state` files for
 audit. Registry growth on session deletion is thereby bounded; `purge-all` clears the
 archived files.
+
+### Review pass 3 (C1, W1, W3, W4, W5)
+
+| Finding | Resolution | Measured |
+| --- | --- | --- |
+| C1 per-turn O(N²) | `_new_turn` uses `sf.last_n` instead of `build_context(sf.read())`; the rebuilt context was discarded anyway | per-turn cost now flat: **4.0 / 6.0 / 5.4 / 7.0 / 5.8 ms** at turns 1/25/50/100/200 (was 7.1 → 21.8 ms) |
+| W1 interrupted turns | `on_session_end` closes an open turn (`error` + `step`); `on_pre_llm` closes a stale turn before starting a new one | interrupted turn now yields `['start','message','call','result','error','step']`; **0 dropped call blocks** (was 1) |
+| W3 compaction marker lost | `_sf_for(session_id, old_session_id)` falls back to the old tagged session | marker appended to the old statefile: True |
+| W4 reset silently stops | `on_session_reset` records a stop marker + pending handoff; `on_session_open` binds it; `on_pre_llm` returns a **one-shot advisory** via context injection | advisory fires once, `/statefile on` named, new session **not** auto-tagged |
+| W2 cost half (registry reads) | mtime/size/inode-validated process-wide read cache (`_snapshot`, no deepcopy); read paths skip `_ensure_dirs`/chmod; `_sf` collapsed to one `get` | `is_tagged` with 1000 entries: **0.203 ms** (was 4.758 ms); a deepcopy-based first attempt regressed to 11.0 ms and was replaced |
+| W5 bounded hooks | mitigated, see below | hook bodies no longer rebuild history or parse the registry per call |
+
+Regression tests: `tests/test_review_fixes.py` (C1 no-history-read, W1 interrupted/retry/normal,
+W3 fallback, W4 one-shot, W2 cache invalidation/shared/purge). The cache also
+remains correct across processes: an external `os.replace` invalidates the stamp.
+
+**W5 (bounded hooks)** is mitigated rather than eliminated: hook bodies are now O(1) in the
+registry and do not rebuild history, and `Recorder._lock` is never held across the
+`ctx.redact_text` RPC. Hermes still bounds `pre_llm_call` / `post_tool_call` /
+`post_llm_call` / `post_compaction` at 30 s and abandons (does not join) a timed-out worker;
+fully removing that risk needs a live host-mode measurement (F8).

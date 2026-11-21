@@ -17,6 +17,8 @@ RECORDING_HOOK_NAMES = (
     "pre_llm_call",
     "post_tool_call",
     "post_llm_call",
+    "on_session_end",
+    "on_session_open",
     "on_session_reset",
     "post_compaction",
 )
@@ -76,6 +78,8 @@ def register(ctx):
         "pre_llm_call": recorder.on_pre_llm,
         "post_tool_call": recorder.on_post_tool,
         "post_llm_call": recorder.on_post_llm,
+        "on_session_end": recorder.on_session_end,
+        "on_session_open": recorder.on_session_open,
         "on_session_reset": recorder.on_reset,
         "post_compaction": recorder.on_compaction,
     }

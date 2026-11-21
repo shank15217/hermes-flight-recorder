@@ -5,10 +5,11 @@
 > Tagged sessions now mirror their turns into the `.state` file through observer hooks;
 > untagged sessions are untouched. Append is O(1) via one cached open handle per statefile, and
 > statefile paths are derived from the session id (both from Mainplane's `statefile` design).
-> `/statefile purge` / `purge-all` and `on_session_delete` handle cleanup. Both review fix
-> passes are in. **Step 4 (usage/cache accounting) is not done.** See
-> [docs/design.md](docs/design.md) for the plan, [UNINSTALL.md](UNINSTALL.md) for removal,
-> and §12 for the review resolution.
+> `/statefile purge` / `purge-all` and `on_session_delete` handle cleanup. Three review fix
+> passes are in (domain errors, O(1) append, session-id-derived paths, explicit step `upto`,
+> interrupted-turn closing, advisory handoff, cached registry reads). **Step 4 (usage/cache
+> accounting) is not done.** See [docs/design.md](docs/design.md) for the plan,
+> [UNINSTALL.md](UNINSTALL.md) for removal, and §12 for the review resolution.
 
 Opt-in, [Mainplane](https://github.com/mainplane-ai/mainplane)-style **append-only statefile
 sessions** for [Hermes Agent](https://hermes-agent.nousresearch.com/).

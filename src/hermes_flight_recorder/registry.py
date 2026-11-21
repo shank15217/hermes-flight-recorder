@@ -15,6 +15,7 @@ import hashlib
 import json
 import os
 import re
+import threading
 from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
@@ -33,6 +34,27 @@ TAGGED_SESSION_TYPE = "mainplane"
 REGISTRY_VERSION = 1
 DEFAULT_CONTEXT_LIMIT = 250000
 DEFAULT_COLD_LIMIT = 100000
+
+# Process-wide read cache. Keyed by resolved registry.json path and validated
+# by (mtime_ns, size, inode), so a write from ANY process invalidates it. A
+# hook used to pay two full JSON parses + four chmods per tool call; now the
+# steady-state read is one stat (W5).
+_registry_cache: dict[str, dict] = {}
+_registry_cache_lock = threading.RLock()
+
+
+def _cache_key(p: Path) -> str:
+    return str(p.resolve())
+
+
+def _snapshot(data: dict) -> dict:
+    """Cheap copy of a parsed registry.
+
+    Callers mutate ``data["sessions"]`` (pop/assign) but never an entry dict
+    in place, so a shallow copy of that mapping is enough. deepcopy here cost
+    ~11 ms per read on a 1000-entry registry -- worse than no cache at all.
+    """
+    return {**data, "sessions": dict(data["sessions"])}
 
 
 class RegistryError(Exception):
@@ -151,8 +173,9 @@ class Registry:
         return replace(entry, statefile=str(self._statefile_path(entry.session_id)))
 
     @contextmanager
-    def _lock(self):
-        self._ensure_dirs()
+    def _lock(self, ensure_dirs: bool = True):
+        if ensure_dirs:
+            self._ensure_dirs()
         fd = os.open(self.lock_path, os.O_CREAT | os.O_RDWR, 0o600)
         try:
             if fcntl is not None:
@@ -164,10 +187,23 @@ class Registry:
             os.close(fd)
 
     def _load(self) -> dict:
-        if not self.path.exists():
+        p = self.path
+        if not p.exists():
+            with _registry_cache_lock:
+                _registry_cache.pop(_cache_key(p), None)
             return {"version": REGISTRY_VERSION, "sessions": {}}
         try:
-            data = json.loads(self.path.read_text(encoding="utf-8"))
+            st = p.stat()
+        except OSError as exc:
+            raise RegistryError(f"registry is unreadable: {exc}") from exc
+        key = _cache_key(p)
+        stamp = (st.st_mtime_ns, st.st_size, st.st_ino)
+        with _registry_cache_lock:
+            hit = _registry_cache.get(key)
+            if hit is not None and hit["stamp"] == stamp:
+                return _snapshot(hit["data"])
+        try:
+            data = json.loads(p.read_text(encoding="utf-8"))
         except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
             raise RegistryError(f"registry is unreadable: {exc}") from exc
         if not isinstance(data, dict) or data.get("version") != REGISTRY_VERSION:
@@ -176,6 +212,14 @@ class Registry:
                 if isinstance(data, dict) else "registry is not an object")
         if not isinstance(data.get("sessions"), dict):
             raise RegistryError("registry has no sessions map")
+        # Re-stat after the read: a concurrent writer changed the file, so the
+        # next _load must not trust this stamp.
+        st2 = p.stat()
+        with _registry_cache_lock:
+            _registry_cache[key] = {
+                "stamp": (st2.st_mtime_ns, st2.st_size, st2.st_ino),
+                "data": _snapshot(data),
+            }
         return data
 
     def _save(self, data: dict) -> None:
@@ -194,11 +238,17 @@ class Registry:
                 os.fsync(dfd)
             finally:
                 os.close(dfd)
+        st = self.path.stat()
+        with _registry_cache_lock:
+            _registry_cache[_cache_key(self.path)] = {
+                "stamp": (st.st_mtime_ns, st.st_size, st.st_ino),
+                "data": _snapshot(data),
+            }
 
     def get(self, session_id: str) -> SessionEntry | None:
         if not session_id or not self.path.exists():
             return None
-        with self._lock():
+        with self._lock(ensure_dirs=False):
             raw = self._load()["sessions"].get(session_id)
         return self._bind(_entry_from(raw)) if raw is not None else None
 
@@ -209,7 +259,7 @@ class Registry:
     def tagged(self) -> list[SessionEntry]:
         if not self.path.exists():
             return []
-        with self._lock():
+        with self._lock(ensure_dirs=False):
             sessions = self._load()["sessions"]
         entries = [self._bind(_entry_from(v)) for v in sessions.values()]
         return sorted((e for e in entries if e.enabled),
@@ -334,4 +384,6 @@ class Registry:
             f = self.data_dir / name
             if f.exists():
                 f.unlink()
+        with _registry_cache_lock:
+            _registry_cache.pop(_cache_key(self.path), None)
         return {"entries": count, "statefiles": removed}

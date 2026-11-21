@@ -19,7 +19,7 @@ import logging
 import threading
 from pathlib import Path
 
-from .records import build_context, new_id
+from .records import new_id
 from .registry import Registry
 from .statefile import get_statefile
 
@@ -49,7 +49,7 @@ class Recorder:
 
     ``data_dir`` is a callable resolved on every use (never cached): it follows
     the active Hermes profile. ``redact`` is ``ctx.redact_text`` captured at
-    registration; without it no hook is registered at all (F7, fail closed).
+    registration; without it the recording hooks are not registered (F7).
     """
 
     def __init__(self, data_dir, redact):
@@ -57,6 +57,9 @@ class Recorder:
         self._redact = redact
         self._lock = threading.RLock()
         self._turns: dict[str, dict] = {}
+        # One-shot advisory for the first turn after a tagged session is reset.
+        self._pending_handoff: dict | None = None
+        self._handoff_target: str | None = None
 
     def _text(self, value) -> bytes:
         if isinstance(value, str):
@@ -68,6 +71,8 @@ class Recorder:
                 s = json.dumps(value, default=str, ensure_ascii=False, sort_keys=True)
             except (TypeError, ValueError):
                 s = str(value)
+        if self._redact is None:
+            return b"[redaction unavailable]"
         try:
             s = self._redact(s, force=True)
         except Exception:
@@ -79,16 +84,31 @@ class Recorder:
         return body
 
     def _sf(self, session_id: str):
+        """One registry read (W5), then the cached open handle."""
         if not session_id:
             return None
         registry = Registry(self._data_dir())
-        if not registry.is_tagged(session_id):
+        entry = registry.get(session_id)
+        if entry is None or not entry.enabled:
             return None
-        return registry.statefile(session_id)
+        return get_statefile(entry.statefile)
+
+    def _sf_for(self, *ids):
+        """First tagged statefile among several candidate session ids (W3)."""
+        for sid in ids:
+            sid = str(sid or "")
+            if not sid:
+                continue
+            sf = self._sf(sid)
+            if sf is not None:
+                return sf
+        return None
 
     def _new_turn(self, sf, session_id: str) -> dict:
-        _, upto = build_context(sf.read())
-        turn = {"step_id": new_id(), "upto": upto}
+        # build_context() returns (ctx, chain[-1].n); we only need the index.
+        # sf.last_n IS that value, straight from the cached handle -- no full
+        # read+rebuild per turn (review C1).
+        turn = {"step_id": new_id(), "upto": sf.last_n}
         self._turns[session_id] = turn
         return turn
 
@@ -96,19 +116,58 @@ class Recorder:
         with self._lock:
             return self._turns.get(session_id) or self._new_turn(sf, session_id)
 
+    def _close_turn(self, sf, session_id: str, turn: dict, *, reason: str) -> None:
+        """Close an unfinished turn so Build() does not drop its blocks (W1).
+
+        Mirrors Mainplane's interrupted-step path: an error record plus a
+        closing step record. Without this, an interrupted /stop leaves orphan
+        ``result`` records whose ``call`` blocks were discarded.
+        """
+        sf.append("error", self._text(f"turn incomplete: {reason}"),
+                  step=turn["step_id"], via="statefile")
+        sf.append("step", b"", id=turn["step_id"], upto=turn["upto"],
+                  via="statefile")
+        with self._lock:
+            self._turns.pop(session_id, None)
+
+    def _take_handoff(self, session_id: str):
+        """Return a one-shot advisory for the first turn after a tagged reset (W4)."""
+        if not session_id or session_id != self._handoff_target:
+            return None
+        handoff = self._pending_handoff
+        self._handoff_target = None
+        self._pending_handoff = None
+        if not handoff:
+            return None
+        return (
+            "hermes-flight-recorder: the previous session "
+            f"({handoff['old_session_id']}) was recorded to "
+            f"{handoff['statefile']}. Recording is NOT enabled for this new "
+            "session; run /statefile on to continue, or /statefile status to check."
+        )
+
     @_guard
     def on_pre_llm(self, **kwargs):
         session_id = str(kwargs.get("session_id") or "")
+        advisory = self._take_handoff(session_id)
         sf = self._sf(session_id)
         if sf is None:
-            return
+            return advisory
+        # A pre_llm_call without a prior post_llm_call means the last turn was
+        # interrupted/retried. Close it before the new message so its blocks
+        # are not orphaned (W1).
+        with self._lock:
+            stale = self._turns.get(session_id)
+        if stale is not None:
+            self._close_turn(sf, session_id, stale,
+                             reason="new turn began before the prior turn closed")
         # The user message is part of THIS turn's prompt, so it must be in the
         # chain before we capture upto (otherwise the step "sees" nothing).
         sf.append("message", self._text(kwargs.get("user_message")),
                   via="pre_llm_call")
         with self._lock:
             self._turns[session_id] = self._new_turn(sf, session_id)
-        return
+        return advisory
 
     @_guard
     def on_post_tool(self, **kwargs):
@@ -143,19 +202,53 @@ class Recorder:
         return
 
     @_guard
+    def on_session_end(self, **kwargs):
+        """Close an unfinished turn when a turn ends interrupted or failed (W1)."""
+        session_id = str(kwargs.get("session_id") or "")
+        if not session_id:
+            return
+        with self._lock:
+            turn = self._turns.get(session_id)
+        if turn is None:  # normal turns were already closed by on_post_llm
+            return
+        sf = self._sf(session_id)
+        if sf is None:
+            return
+        reason = ("interrupted" if kwargs.get("interrupted") else
+                  "failed" if kwargs.get("failed") else "session end")
+        self._close_turn(sf, session_id, turn, reason=reason)
+        return
+
+    @_guard
+    def on_session_open(self, **kwargs):
+        """Bind a pending reset handoff to the newly opened session (W4)."""
+        session_id = str(kwargs.get("session_id") or "")
+        with self._lock:
+            pending = self._pending_handoff
+            if (pending and session_id and
+                    session_id != pending["old_session_id"] and
+                    self._handoff_target is None):
+                self._handoff_target = session_id
+
+    @_guard
     def on_reset(self, **kwargs):
         session_id = str(kwargs.get("session_id") or "")
         sf = self._sf(session_id)
         if sf is None:
             return
-        sf.append("system", self._text("session reset"),
-                  via="on_session_reset")
+        sf.append("system", self._text(
+            "session reset; recording stops here until /statefile on is run "
+            "in the new session"), via="on_session_reset")
+        with self._lock:
+            self._pending_handoff = {"old_session_id": session_id,
+                                     "statefile": str(sf.path)}
         return
 
     @_guard
     def on_compaction(self, **kwargs):
-        session_id = str(kwargs.get("session_id") or "")
-        sf = self._sf(session_id)
+        # Compaction may report the NEW (untagged) session id; fall back to the
+        # old one so the boundary is not silently lost (W3).
+        sf = self._sf_for(kwargs.get("session_id"), kwargs.get("old_session_id"))
         if sf is None:
             return
         note = {k: kwargs.get(k) for k in (
