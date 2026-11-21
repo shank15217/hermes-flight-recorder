@@ -10,4 +10,4 @@ from __future__ import annotations
 
 def register(ctx):
     """Inert scaffold entry point. No hooks, tools or commands are registered."""
-    return None
+    return
