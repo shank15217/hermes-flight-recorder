@@ -1,8 +1,9 @@
 # hermes-flight-recorder
 
-> **Status: scaffold.** This repository currently contains the design, attribution, license,
-> package layout and test skeleton only. **No plugin code is implemented yet** — nothing here
-> is installable or runnable. See [docs/design.md](docs/design.md) for the plan.
+> **Status: step 1 of 7.** The record format, on-disk I/O and deterministic context rebuild
+> are implemented and tested as a standalone library. **The Hermes plugin is still inert** —
+> nothing is installed, no session is tagged, no hook is registered. See
+> [docs/design.md](docs/design.md) for the plan.
 
 Opt-in, [Mainplane](https://github.com/mainplane-ai/mainplane)-style **append-only statefile
 sessions** for [Hermes Agent](https://hermes-agent.nousresearch.com/).
@@ -63,7 +64,7 @@ they are excellent; this project borrows one pattern, not the product.
 | Step | Deliverable | Status |
 | --- | --- | --- |
 | 0 | Repo, prior-art credit, license, design doc, package + test skeleton | **done (this repo)** |
-| 1 | Record format + `Build()` reorder, with tests | planned |
+| 1 | Record format + `Build()` reorder, with tests | **done** |
 | 2 | Registry + `/statefile on\|off\|status` command | planned |
 | 3 | Hook wiring → live `.state` mirroring for tagged sessions | planned |
 | 4 | `post_api_request` usage capture; verify cache fields on local llama.cpp / vLLM | planned |

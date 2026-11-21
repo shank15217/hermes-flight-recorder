@@ -28,14 +28,8 @@ def test_attribution_is_present():
     assert "MIT" in notice
 
 
-@pytest.mark.skip(reason="roadmap step 1: record I/O not implemented")
-def test_record_roundtrip_keeps_raw_bytes():
-    ...
-
-
-@pytest.mark.skip(reason="roadmap step 1: Build() not implemented")
-def test_build_context_places_results_after_their_step():
-    ...
+# Step 1 landed: the record round-trip and Build() specs now live as real
+# tests in tests/test_records.py.
 
 
 @pytest.mark.skip(reason="roadmap step 2: registry not implemented")

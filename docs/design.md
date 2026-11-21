@@ -3,6 +3,10 @@
 > Status: **draft**. Hook signatures below come from the Hermes plugin docs
 > (<https://hermes-agent.nousresearch.com/docs/developer-guide/plugins>) and must be re-verified
 > against the running Hermes version at implementation time.
+>
+> Step 1 (record format / `Build()`) is implemented — see
+> `src/hermes_flight_recorder/records.py` and `tests/test_records.py`. Everything from §4
+> onward that touches Hermes is still a plan.
 
 ## 1. Goal
 
@@ -16,6 +20,12 @@ Give a Hermes user an **opt-in per-session** second representation of a conversa
 
 Untagged sessions see **zero** plugin behaviour. Nothing is global, nothing is automatic by
 default.
+
+**Tagging is sticky.** Once a session is enabled, the tag and its `.state` file persist across
+turns, Hermes restarts and plugin updates — for that session only — until `/statefile off`.
+The registry and every `.state` file live under `plugin_data_dir()`, which follows the active
+Hermes profile and survives `hermes plugins update`. No file is created for an untagged
+session.
 
 ## 2. Non-goals
 
@@ -93,6 +103,12 @@ guessed parse loses information. Usage is recorded per `step`:
 ```
 
 `prompt = input + cache_read + cache_write`.
+
+**Append order within a step.** Blocks (`text`, `thinking`, `call`) stream in *before* the
+`step` record that closes them; results follow it. A step record's `upto` is the highest `n`
+in the chain when that step's prompt was built (upstream: `hdr.Upto = upto`), so results
+appended after the step are not attributed to it — they are seen by the *next* step. That is
+why `Build()` defers records with `n > step.upto` rather than dropping them.
 
 ## 6. Context rebuild (`Build`)
 
