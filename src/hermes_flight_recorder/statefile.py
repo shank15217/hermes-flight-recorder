@@ -224,6 +224,15 @@ def get_statefile(path) -> StateFile:
     return sf
 
 
+def forget_statefile(path) -> None:
+    """Close and drop the cached handle for a statefile that is being deleted."""
+    key = str(Path(path).resolve())
+    with _cache_lock:
+        sf = _cache.pop(key, None)
+    if sf is not None:
+        sf.close()
+
+
 def append_record(path, kind: str, body=b"", *, id: str | None = None,
                   step: str = "", upto: int | None = None,
                   ts: str | None = None, **extra) -> Record:

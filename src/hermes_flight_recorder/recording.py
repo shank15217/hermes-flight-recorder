@@ -17,9 +17,11 @@ import functools
 import json
 import logging
 import threading
+from pathlib import Path
 
 from .records import build_context, new_id
 from .registry import Registry
+from .statefile import get_statefile
 
 logger = logging.getLogger(__name__)
 
@@ -160,4 +162,30 @@ class Recorder:
             "kind", "reason", "before_tokens", "after_tokens",
             "messages_removed", "old_session_id")}
         sf.append("system", self._text(note), via="post_compaction")
+        return
+
+    @_guard
+    def on_delete(self, **kwargs):
+        """Archive tagged sessions Hermes deleted (or hid).
+
+        Keeps each .state file for audit but drops its registry entry, so the
+        registry cannot grow without bound (review W2). Bulk deletes carry
+        ``deleted_ids``; a single delete carries only ``session_id``. This hook
+        stores no transcript text, only Hermes-provided enum fields.
+        """
+        ids = kwargs.get("deleted_ids")
+        if not isinstance(ids, (list, tuple)) or not ids:
+            primary = str(kwargs.get("session_id") or "")
+            ids = [primary] if primary else []
+        if not ids:
+            return
+        registry = Registry(self._data_dir())
+        note = json.dumps({"reason": kwargs.get("reason"),
+                           "profile": kwargs.get("profile")},
+                          sort_keys=True, ensure_ascii=False).encode()
+        for entry in registry.archive_many(ids):
+            path = Path(entry.statefile)
+            if path.exists():
+                get_statefile(path).append("system", note,
+                                           via="on_session_delete")
         return

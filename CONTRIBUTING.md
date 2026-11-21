@@ -16,3 +16,5 @@ Ground rules:
 - A native plugin directory needs `plugin.yaml` + `__init__.py` with `register(ctx)` at the
   repo root; the library lives under `src/`. Check the load with `hermes plugins doctor .`
   before pushing.
+- Keep `UNINSTALL.md` accurate whenever the runtime file layout changes; a user must be able
+  to trace and delete every file the plugin created.

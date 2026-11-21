@@ -14,7 +14,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def test_scaffold_layout():
     for rel in (
-        "README.md", "NOTICE", "LICENSE", "CONTRIBUTING.md",
+        "README.md", "NOTICE", "LICENSE", "CONTRIBUTING.md", "UNINSTALL.md",
         "docs/design.md", "docs/prior-art.md", "pyproject.toml", "plugin.yaml",
         "__init__.py",
         "src/hermes_flight_recorder/__init__.py",

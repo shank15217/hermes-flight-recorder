@@ -70,7 +70,7 @@ def fire_turn(ctx, session_id="s1", *, user="hello", result="ok",
     )
 
 
-def test_register_wires_command_and_exactly_the_five_hooks(tmp_path, monkeypatch):
+def test_register_wires_command_and_all_hooks(tmp_path, monkeypatch):
     fake_storage(monkeypatch, tmp_path)
     ctx = FakeCtx()
     register(ctx)
@@ -79,13 +79,13 @@ def test_register_wires_command_and_exactly_the_five_hooks(tmp_path, monkeypatch
     assert ctx.tools == []
 
 
-def test_missing_redact_text_registers_no_hooks(tmp_path, monkeypatch):
-    """F7 fail-closed: never record unredacted transcript text."""
+def test_missing_redact_text_registers_only_cleanup_hook(tmp_path, monkeypatch):
+    """F7 fail-closed for recording; cleanup still runs (it stores no user text)."""
     fake_storage(monkeypatch, tmp_path)
     ctx = FakeCtx(redact=False)
     register(ctx)
     assert list(ctx.commands) == ["statefile"]
-    assert ctx.hooks == {}
+    assert set(ctx.hooks) == {"on_session_delete"}
 
 
 def test_full_turn_mirrors_all_records(tmp_path, monkeypatch):

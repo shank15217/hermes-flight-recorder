@@ -178,6 +178,7 @@ sessions only:
 | `post_llm_call` | `text` (assistant response) then the `step` record with the captured `upto` |
 | `on_session_reset` | `system` marker |
 | `post_compaction` | `system` marker with kind/reason/token counts |
+| `on_session_delete` | `system` marker (reason/profile only), then **archives** the registry entry: the `.state` file is kept for audit, the entry is dropped so the registry cannot grow without bound (review W2) |
 
 `pre_api_request` / `post_api_request` are deliberately **not** wired yet: usage and cache
 accounting are step 4. A single `step` per Hermes turn (rather than per provider API request)
@@ -253,7 +254,14 @@ automatic rollover deferred to v0.2 pending testing on real sessions.
 
 All state under `plugin_data_dir()` (follows the active Hermes profile). Files mode 0600,
 directory 0700, fsync on flush. `.state` files and `registry.json` are gitignored. No egress.
-Deleting a tagged session archives its `.state` rather than dropping it.
+
+**Deletion / uninstall.** `on_session_delete` archives: it appends one `system` record and drops
+the registry entry but **keeps** the `.state` file, so session deletion does not make
+`registry.json` grow. Explicit removal is `/statefile purge` (one session: entry + file +
+cached handle) and `/statefile purge-all` (all entries, all statefiles, `registry.json` and
+`registry.lock`). `hermes plugins remove` deletes only the install tree — Hermes deliberately
+keeps `plugin-data/` across `remove`/`update`. The full procedure, per-profile paths and file
+inspection commands are in [UNINSTALL.md](../UNINSTALL.md).
 
 ## 12. Review resolution (pre-step-3 gate)
 
@@ -295,7 +303,7 @@ write no records. `data_dir()` resolves `plugin_data_dir()` on **every call** (F
 across profile switches). `step` records carry the `upto` captured at prompt-build time (F6).
 Hook failures are logged and swallowed, so a plugin can never break a session.
 
-Verified: `hermes plugins doctor --ci` reports **5 hooks / 0 tools**; `hermes plugins
+Verified: `hermes plugins doctor --ci` reports **6 hooks / 0 tools**; `hermes plugins
 validate` passes incl. security scan; a real `HERMES_HOME` with the plugin installed and
 enabled fired `pre_llm_call` / `post_tool_call` / `post_llm_call` / `on_session_reset`
 through Hermes' own `invoke_hook` and produced
@@ -309,3 +317,20 @@ rebuild and real redaction of an `sk-` key.
   ad-hoc probe cannot launch the PM-managed host child. Needs a live gateway session.
 - The design decision on whether `read_records` should default to tolerating a torn tail.
 - Step 4's cache-field measurement (the endpoint to measure against must be supplied).
+
+### Cleanup pass (review W2 + uninstall traceability)
+
+`UNINSTALL.md` documents the two locations (install tree vs `<hermes home>/plugin-data/<name>/`,
+including per-profile copies), how to inspect `registry.json` and `.state` files, and the
+full `hermes plugins remove` + `rm -rf` procedure.
+
+Added `/statefile purge` (one session) and `/statefile purge-all` (all data), backed by
+`Registry.archive_many` / `archive` / `purge` / `purge_all`, and `forget_statefile()` so a
+deleted file's cached open handle cannot keep writing to an unlinked inode.
+
+`on_session_delete` closes **W2**: Hermes fires it with `session_id`, `reason`, `profile` and
+optional `deleted_ids`, dispatched under the owning profile's home. The hook appends one
+`system` marker (no transcript text, so it is registered even without `ctx.redact_text`) and
+drops the registry entries in a single `archive_many` pass, keeping the `.state` files for
+audit. Registry growth on session deletion is thereby bounded; `purge-all` clears the
+archived files.

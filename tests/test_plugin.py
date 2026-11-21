@@ -44,12 +44,13 @@ def _fake_storage(monkeypatch, tmp_path):
     return mod, tmp_path / "hermes-flight-recorder"
 
 
-def test_register_registers_only_the_command():
+def test_register_registers_command_and_cleanup_hook():
+    """Without ctx.redact_text only the cleanup hook (no recording hooks) is wired."""
     ctx = FakeCtx()
     register(ctx)
     assert list(ctx.commands) == ["statefile"]
-    assert ctx.commands["statefile"][2] == "on|off|status"
-    assert ctx.hooks == []
+    assert ctx.commands["statefile"][2] == "on|off|status|purge|purge-all"
+    assert [h[0][0] for h in ctx.hooks] == ["on_session_delete"]
     assert ctx.tools == []
     assert ctx.skills == []
 

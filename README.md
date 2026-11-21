@@ -2,11 +2,13 @@
 
 > **Status: step 3 of 7.** The record format, deterministic context rebuild, a sticky
 > per-session registry and the `/statefile on|off|status` command are implemented and tested.
-> Tagged sessions now mirror their turns into the `.state` file through five observer hooks;
+> Tagged sessions now mirror their turns into the `.state` file through observer hooks;
 > untagged sessions are untouched. Append is O(1) via one cached open handle per statefile, and
 > statefile paths are derived from the session id (both from Mainplane's `statefile` design).
-> Both review fix passes are in. **Step 4 (usage/cache accounting) is not done.** See
-> [docs/design.md](docs/design.md) for the plan and §12 for the review resolution.
+> `/statefile purge` / `purge-all` and `on_session_delete` handle cleanup. Both review fix
+> passes are in. **Step 4 (usage/cache accounting) is not done.** See
+> [docs/design.md](docs/design.md) for the plan, [UNINSTALL.md](UNINSTALL.md) for removal,
+> and §12 for the review resolution.
 
 Opt-in, [Mainplane](https://github.com/mainplane-ai/mainplane)-style **append-only statefile
 sessions** for [Hermes Agent](https://hermes-agent.nousresearch.com/).
@@ -64,13 +66,19 @@ point, enable it in `plugins.enabled`, then in any session:
 ```
 /statefile on      # enable Mainplane-style recording for THIS session only
 /statefile status  # show type, statefile path, record count, chain, limits
-/statefile off     # disable; the entry and .state file are kept, re-enabling resumes it
+/statefile off      # disable; the entry and .state file are kept, re-enabling resumes it
+/statefile purge     # delete THIS session's tag and .state file (irreversible)
+/statefile purge-all # delete ALL plugin data (irreversible)
 ```
 
 Once enabled, the five observer hooks mirror that session's user messages, tool calls and
 results, and assistant replies into the `.state` file. Every stored body is passed through
 Hermes' `ctx.redact_text(..., force=True)` first, and bodies are capped at 256 KiB. Nothing is
 written for sessions you never enabled. Usage/cache accounting is step 4, not wired yet.
+
+`hermes plugins remove` deletes the install tree but **not** the runtime data under
+`plugin-data/` — see **[UNINSTALL.md](UNINSTALL.md)** for the full removal procedure and how to
+inspect the files directly.
 
 ## Non-goals
 

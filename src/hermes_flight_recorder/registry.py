@@ -26,7 +26,7 @@ except ImportError:  # pragma: no cover - platform dependent
     fcntl = None  # type: ignore[assignment]
 
 from .records import new_id
-from .statefile import StateFile, append_record, get_statefile
+from .statefile import StateFile, append_record, forget_statefile, get_statefile
 
 # One owner for this fact: re-exported from the package facade.
 TAGGED_SESSION_TYPE = "mainplane"
@@ -270,3 +270,68 @@ class Registry:
         if entry is None or not entry.enabled:
             return None
         return get_statefile(entry.statefile)
+
+    # --- cleanup ----------------------------------------------------------
+
+    def archive_many(self, session_ids) -> list[SessionEntry]:
+        """Drop registry entries but KEEP their .state files (design §11).
+
+        One lock/read/write for a whole bulk delete, so `on_session_delete`
+        does not re-read the registry once per id.
+        """
+        entries = []
+        with self._lock():
+            data = self._load()
+            for sid in session_ids:
+                sid = str(sid)
+                raw = data["sessions"].pop(sid, None)
+                if raw is not None:
+                    entries.append(self._bind(_entry_from(raw)))
+            if entries:
+                self._save(data)
+        return entries
+
+    def archive(self, session_id: str) -> SessionEntry | None:
+        """Drop one registry entry, keeping its .state file for audit."""
+        _check_session_id(session_id)
+        found = self.archive_many([session_id])
+        return found[0] if found else None
+
+    def purge(self, session_id: str) -> dict:
+        """Remove one session entirely: registry entry + .state file + cached handle."""
+        entry = self.archive(session_id)
+        if entry is None:
+            return {"found": False, "statefile_removed": False}
+        sf_path = Path(entry.statefile)
+        removed = False
+        if sf_path.exists() and sf_path.resolve().is_relative_to(
+                self.sessions_dir.resolve()):
+            forget_statefile(sf_path)
+            sf_path.unlink()
+            removed = True
+        return {"found": True, "statefile_removed": removed,
+                "statefile": str(sf_path)}
+
+    def purge_all(self) -> dict:
+        """Remove ALL plugin state: entries, every .state file, registry files.
+
+        Irreversible. The empty data directories remain; UNINSTALL.md shows how
+        to delete them after `hermes plugins remove`.
+        """
+        with self._lock():
+            data = self._load()
+            count = len(data["sessions"])
+            data["sessions"] = {}
+            self._save(data)
+        removed = 0
+        if self.sessions_dir.exists():
+            for p in self.sessions_dir.glob("*.state"):
+                if p.resolve().is_relative_to(self.sessions_dir.resolve()):
+                    forget_statefile(p)
+                    p.unlink()
+                    removed += 1
+        for name in ("registry.json", "registry.lock"):
+            f = self.data_dir / name
+            if f.exists():
+                f.unlink()
+        return {"entries": count, "statefiles": removed}
