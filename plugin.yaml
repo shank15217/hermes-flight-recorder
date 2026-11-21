@@ -1,10 +1,15 @@
-# Scaffold only. register(ctx) currently registers nothing — see docs/design.md.
-# Once v0.1 lands, install as a USER plugin (~/.hermes/plugins/); the gateway does
-# not load project-local ./.hermes/plugins/ directories.
+# Native Hermes plugin manifest. Install as a USER plugin
+# (~/.hermes/plugins/hermes-flight-recorder/) or via a pip entry point; the
+# gateway does not load project-local ./.hermes/plugins/ directories.
 name: hermes-flight-recorder
-version: "0.0.0"
+version: 0.2.0.dev1
+manifest_version: 2
+api_version: 1
+license: MIT
+homepage: https://github.com/shank15217/hermes-flight-recorder
+tags: [session, statefile, context, prompt-cache]
 description: >-
-  Opt-in Mainplane-style append-only statefile sessions for Hermes.
-  SCAFFOLD: no hooks, tools or commands are registered yet.
+  Opt-in Mainplane-style append-only statefile recording for individual Hermes
+  sessions. /statefile on|off|status. Untagged sessions are untouched.
 provides_tools: []
 provides_hooks: []

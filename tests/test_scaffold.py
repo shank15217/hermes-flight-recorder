@@ -1,8 +1,8 @@
-"""Scaffold tests.
+"""Scaffold / repository-contract tests.
 
-One real test (the layout exists) plus skipped specifications that become real
-tests as each roadmap step lands. Kept explicit so the intended behaviour is
-documented before any implementation exists.
+Real layout and attribution checks, plus the remaining skipped specification
+for the last roadmap step. Step 1 and step 2 specs now live as real tests in
+tests/test_records.py, tests/test_registry.py and tests/test_commands.py.
 """
 
 from pathlib import Path
@@ -16,6 +16,7 @@ def test_scaffold_layout():
     for rel in (
         "README.md", "NOTICE", "LICENSE", "CONTRIBUTING.md",
         "docs/design.md", "docs/prior-art.md", "pyproject.toml", "plugin.yaml",
+        "__init__.py",
         "src/hermes_flight_recorder/__init__.py",
     ):
         assert (ROOT / rel).is_file(), f"missing {rel}"
@@ -26,15 +27,6 @@ def test_attribution_is_present():
     assert "mainplane-ai/mainplane" in notice
     assert "@Alezander9" in notice
     assert "MIT" in notice
-
-
-# Step 1 landed: the record round-trip and Build() specs now live as real
-# tests in tests/test_records.py.
-
-
-@pytest.mark.skip(reason="roadmap step 2: registry not implemented")
-def test_untagged_sessions_are_untouched():
-    ...
 
 
 @pytest.mark.skip(reason="roadmap step 5: rollover not implemented")

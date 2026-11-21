@@ -4,9 +4,9 @@
 > (<https://hermes-agent.nousresearch.com/docs/developer-guide/plugins>) and must be re-verified
 > against the running Hermes version at implementation time.
 >
-> Step 1 (record format / `Build()`) is implemented — see
-> `src/hermes_flight_recorder/records.py` and `tests/test_records.py`. Everything from §4
-> onward that touches Hermes is still a plan.
+> Steps 1-2 are implemented: record format / `Build()` (`records.py`, `statefile.py`) and the
+> sticky registry + `/statefile` command (`registry.py`, `commands.py`, `plugin.py`).
+> Step 3 (hook mirroring) onward is still a plan.
 
 ## 1. Goal
 
@@ -66,6 +66,7 @@ Registry lives at `plugin_data_dir()/registry.json` (per HERMES_HOME / profile):
   "sessions": {
     "<session_id>": {
       "type": "mainplane",
+      "enabled": true,
       "statefile": "/.../plugin-data/sessions/<session_id>.state",
       "agent_id": "<uuid>",
       "chain": ["<session_id>", "..."],
@@ -81,6 +82,21 @@ Registry lives at `plugin_data_dir()/registry.json` (per HERMES_HOME / profile):
 
 `type: mainplane` is a local format tag (see `docs/prior-art.md` § Note on naming). A chain is the
 ordered list of sessions belonging to one logical agent; `parent` links a handoff.
+
+**Implemented in step 2.** `Registry` (`src/hermes_flight_recorder/registry.py`) owns this file:
+`tag()` (idempotent), `untag()` (sets `enabled: false` but keeps the entry and
+the `.state` file), `get` / `is_tagged` / `tagged`. `is_tagged` and `tagged` count only
+enabled entries; `get` still returns a disabled one so `/statefile status` can report it.
+Re-enabling resumes the same `agent_id`, `statefile` and `chain`.
+Writes are serialized with `flock` and published atomically (`registry.json.tmp` →
+`os.replace`), 0600 file / 0700 dirs. A corrupt or wrong-version registry raises
+`RegistryError` rather than being silently reset. `tag()` also creates the session's `.state`
+file with one `start` record; a later `on` after `off` resumes the same file and chain.
+
+`/statefile on|off|status` is registered with `ctx.register_command(name, handler, description,
+args_hint)`. The handler resolves `plugin_data_dir("hermes-flight-recorder")` on **every call**
+(it follows the active profile and must not be cached) and always returns text. With no
+`session_id` it fails closed. **No hooks and no tools are registered at this step.**
 
 ## 5. Record format
 

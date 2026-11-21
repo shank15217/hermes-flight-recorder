@@ -1,18 +1,16 @@
 """hermes-flight-recorder — opt-in append-only statefile sessions for Hermes Agent.
 
-Roadmap step 1 (done): record format, on-disk I/O and deterministic context
-rebuild in :mod:`records` / :mod:`statefile`. The plugin entry point is still
-deliberately inert -- nothing is installed, nothing is hooked, no session is
-touched until a later step.
+Roadmap steps 1-2 (done): record format / deterministic context rebuild, and a
+sticky per-session registry behind ``/statefile on|off|status``. Step 3 (hook
+mirroring into a live session) is NOT implemented: the plugin registers one
+command, no hooks, no tools.
 
 Design and attribution: see README, NOTICE and docs/design.md.
 """
 
-__version__ = "0.1.0.dev1"
+__version__ = "0.2.0.dev1"
 
-# The internal session-format tag. See docs/prior-art.md "Note on naming".
-TAGGED_SESSION_TYPE = "mainplane"
-
+from .commands import USAGE, handle_statefile
 from .records import (
     BLOCK_KINDS,
     CONTEXT_EXCLUDED,
@@ -24,19 +22,36 @@ from .records import (
     new_id,
     read_records,
 )
+from .registry import (
+    DEFAULT_COLD_LIMIT,
+    DEFAULT_CONTEXT_LIMIT,
+    REGISTRY_VERSION,
+    TAGGED_SESSION_TYPE,
+    Registry,
+    RegistryError,
+    SessionEntry,
+)
 from .statefile import StateFile
 
 __all__ = [
     "BLOCK_KINDS",
     "CONTEXT_EXCLUDED",
+    "DEFAULT_COLD_LIMIT",
+    "DEFAULT_CONTEXT_LIMIT",
     "KINDS",
+    "REGISTRY_VERSION",
     "TAGGED_SESSION_TYPE",
+    "USAGE",
     "Record",
     "RecordFormatError",
+    "Registry",
+    "RegistryError",
+    "SessionEntry",
     "StateFile",
     "__version__",
     "append_record",
     "build_context",
+    "handle_statefile",
     "new_id",
     "read_records",
 ]

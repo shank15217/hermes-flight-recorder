@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "hermes-flight-recorder"
-version = "0.1.0.dev1"
-description = "Opt-in Mainplane-style append-only statefile sessions for Hermes Agent (scaffold)"
+version = "0.2.0.dev1"
+description = "Opt-in Mainplane-style append-only statefile sessions for Hermes Agent"
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }

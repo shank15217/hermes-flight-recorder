@@ -1,8 +1,9 @@
 # hermes-flight-recorder
 
-> **Status: step 1 of 7.** The record format, on-disk I/O and deterministic context rebuild
-> are implemented and tested as a standalone library. **The Hermes plugin is still inert** —
-> nothing is installed, no session is tagged, no hook is registered. See
+> **Status: step 2 of 7.** The record format, deterministic context rebuild, a sticky
+> per-session registry and the `/statefile on|off|status` command are implemented and tested.
+> **No hooks are registered yet** — a tagged session does not yet mirror its turns into the
+> `.state` file (that is step 3). Untagged sessions are untouched. See
 > [docs/design.md](docs/design.md) for the plan.
 
 Opt-in, [Mainplane](https://github.com/mainplane-ai/mainplane)-style **append-only statefile
@@ -53,6 +54,22 @@ not affiliated with, endorsed by, or a fork of Mainplane.
 The full hook mapping, record format, registry schema, rollover math, constraints and open
 questions are in **[docs/design.md](docs/design.md)**.
 
+## Usage (step 2)
+
+Install as a **user plugin** (`~/.hermes/plugins/hermes-flight-recorder/`) or via a pip entry
+point, enable it in `plugins.enabled`, then in any session:
+
+```
+/statefile on      # enable Mainplane-style recording for THIS session only
+/statefile status  # show type, statefile path, record count, chain, limits
+/statefile off     # disable; the entry and .state file are kept, re-enabling resumes it
+```
+
+The tag and its `.state` file live under `plugin_data_dir()` (per Hermes profile) and persist
+across turns, restarts and plugin updates. Nothing is written for sessions you never enabled.
+Hooks are not wired yet, so recording is currently limited to the `start` record created when
+you opt in.
+
 ## Non-goals
 
 No WireGuard mesh, no remote workers, no shared NFS/SMB drives, no provider proxy, no web UI,
@@ -65,7 +82,7 @@ they are excellent; this project borrows one pattern, not the product.
 | --- | --- | --- |
 | 0 | Repo, prior-art credit, license, design doc, package + test skeleton | **done (this repo)** |
 | 1 | Record format + `Build()` reorder, with tests | **done** |
-| 2 | Registry + `/statefile on\|off\|status` command | planned |
+| 2 | Registry + `/statefile on\|off\|status` command | **done** |
 | 3 | Hook wiring → live `.state` mirroring for tagged sessions | planned |
 | 4 | `post_api_request` usage capture; verify cache fields on local llama.cpp / vLLM | planned |
 | 5 | `cold_limit` policy + handoff via context injection (advisory first) | planned |

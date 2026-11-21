@@ -13,3 +13,6 @@ Ground rules:
   restrictive permissions, and no network egress.
 - Verify hook signatures against the current Hermes plugin docs before wiring them; the tables
   in `docs/design.md` are a plan, not a guarantee.
+- A native plugin directory needs `plugin.yaml` + `__init__.py` with `register(ctx)` at the
+  repo root; the library lives under `src/`. Check the load with `hermes plugins doctor .`
+  before pushing.
