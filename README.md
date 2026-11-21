@@ -1,12 +1,11 @@
 # hermes-flight-recorder
 
-> **Status: step 2 of 7, review fixes landed.** The record format, deterministic context
-> rebuild, a sticky per-session registry and the `/statefile on|off|status` command are
-> implemented and tested. Append is O(1) via one cached open handle per statefile, and statefile
-> paths are derived from the session id (both from Mainplane's `statefile` design). Both review
-> fix passes are in: domain errors, strict `enabled` parsing, explicit step `upto`, mypy + extended
-> ruff CI gates. **No hooks are registered yet** — a tagged session does not yet mirror its turns
-> into the `.state` file (that is step 3). Untagged sessions are untouched. See
+> **Status: step 3 of 7.** The record format, deterministic context rebuild, a sticky
+> per-session registry and the `/statefile on|off|status` command are implemented and tested.
+> Tagged sessions now mirror their turns into the `.state` file through five observer hooks;
+> untagged sessions are untouched. Append is O(1) via one cached open handle per statefile, and
+> statefile paths are derived from the session id (both from Mainplane's `statefile` design).
+> Both review fix passes are in. **Step 4 (usage/cache accounting) is not done.** See
 > [docs/design.md](docs/design.md) for the plan and §12 for the review resolution.
 
 Opt-in, [Mainplane](https://github.com/mainplane-ai/mainplane)-style **append-only statefile
@@ -68,10 +67,10 @@ point, enable it in `plugins.enabled`, then in any session:
 /statefile off     # disable; the entry and .state file are kept, re-enabling resumes it
 ```
 
-The tag and its `.state` file live under `plugin_data_dir()` (per Hermes profile) and persist
-across turns, restarts and plugin updates. Nothing is written for sessions you never enabled.
-Hooks are not wired yet, so recording is currently limited to the `start` record created when
-you opt in.
+Once enabled, the five observer hooks mirror that session's user messages, tool calls and
+results, and assistant replies into the `.state` file. Every stored body is passed through
+Hermes' `ctx.redact_text(..., force=True)` first, and bodies are capped at 256 KiB. Nothing is
+written for sessions you never enabled. Usage/cache accounting is step 4, not wired yet.
 
 ## Non-goals
 
@@ -86,7 +85,7 @@ they are excellent; this project borrows one pattern, not the product.
 | 0 | Repo, prior-art credit, license, design doc, package + test skeleton | **done (this repo)** |
 | 1 | Record format + `Build()` reorder, with tests | **done** |
 | 2 | Registry + `/statefile on\|off\|status` command | **done** |
-| 3 | Hook wiring → live `.state` mirroring for tagged sessions | planned |
+| 3 | Hook wiring → live `.state` mirroring for tagged sessions | **done** |
 | 4 | `post_api_request` usage capture; verify cache fields on local llama.cpp / vLLM | planned |
 | 5 | `cold_limit` policy + handoff via context injection (advisory first) | planned |
 | 6 | Skill + docs for install under `~/.hermes/plugins/` | planned |

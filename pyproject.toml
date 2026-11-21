@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "hermes-flight-recorder"
-version = "0.2.0.dev3"
+version = "0.3.0.dev1"
 description = "Opt-in Mainplane-style append-only statefile sessions for Hermes Agent"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -37,4 +37,5 @@ addopts = "-q"
 [tool.mypy]
 mypy_path = "src"
 explicit_package_bases = true
+check_untyped_defs = true
 ignore_missing_imports = true

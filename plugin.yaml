@@ -2,7 +2,7 @@
 # (~/.hermes/plugins/hermes-flight-recorder/) or via a pip entry point; the
 # gateway does not load project-local ./.hermes/plugins/ directories.
 name: hermes-flight-recorder
-version: 0.2.0.dev3
+version: 0.3.0.dev1
 manifest_version: 2
 api_version: 1
 license: MIT
@@ -12,4 +12,9 @@ description: >-
   Opt-in Mainplane-style append-only statefile recording for individual Hermes
   sessions. /statefile on|off|status. Untagged sessions are untouched.
 provides_tools: []
-provides_hooks: []
+provides_hooks:
+  - pre_llm_call
+  - post_tool_call
+  - post_llm_call
+  - on_session_reset
+  - post_compaction

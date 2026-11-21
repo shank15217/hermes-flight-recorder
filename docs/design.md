@@ -4,9 +4,9 @@
 > (<https://hermes-agent.nousresearch.com/docs/developer-guide/plugins>) and must be re-verified
 > against the running Hermes version at implementation time.
 >
-> Steps 1-2 are implemented: record format / `Build()` (`records.py`, `statefile.py`) and the
-> sticky registry + `/statefile` command (`registry.py`, `commands.py`, `plugin.py`).
-> Step 3 (hook mirroring) onward is still a plan.
+> Steps 1-3 are implemented: record format / `Build()` (`records.py`, `statefile.py`), the
+> sticky registry + `/statefile` command (`registry.py`, `commands.py`, `plugin.py`), and hook
+> mirroring (`recording.py`). Step 4 (usage/cache accounting) onward is still a plan.
 
 ## 1. Goal
 
@@ -167,6 +167,22 @@ Given the chain of records, produce API context order:
 | `on_session_delete` | `session_id, reason, profile, deleted_ids, sessions_dir` | archive, don't silently delete, the `.state` file |
 | `on_session_end` | `session_id, completed, interrupted, model, platform` | flush / fsync |
 
+**Implemented in step 3.** `recording.py` registers five observer hooks (all `**kwargs`,
+so they receive the full additive payload) and appends Mainplane-shaped records for tagged
+sessions only:
+
+| Hook | Records |
+| --- | --- |
+| `pre_llm_call` | `message` (user turn), then captures `upto` from `build_context()` **after** the message is appended, and opens a turn with a fresh `step_id` |
+| `post_tool_call` | `call` (tool name + args) and `result`, both tagged with that `step_id`; `result` carries `for: <call id>` |
+| `post_llm_call` | `text` (assistant response) then the `step` record with the captured `upto` |
+| `on_session_reset` | `system` marker |
+| `post_compaction` | `system` marker with kind/reason/token counts |
+
+`pre_api_request` / `post_api_request` are deliberately **not** wired yet: usage and cache
+accounting are step 4. A single `step` per Hermes turn (rather than per provider API request)
+is a documented simplification.
+
 **F7 — hard gate for step 3.** `post_tool_call` results and transcripts can contain secrets.
 Hermes' plugin guide requires running saved text through `ctx.redact_text(text, force=True)`
 before storing it; step 3 MUST do this at the point where a hook's payload becomes a record
@@ -181,8 +197,14 @@ build) constrain the design:
   `post_auxiliary_call`, **not** `pre/post_api_request`. Step 4's accounting must not mistake
   them for session steps.
 
-Step 3 must therefore define a single redaction/serialization boundary and record what it
-actually received, not what it assumes the provider sent.
+**F7 resolved in step 3.** `Recorder._text()` is the single redaction/serialization boundary:
+every stored body passes through `ctx.redact_text(..., force=True)` before `append_record`, and
+a redaction failure stores `[redaction unavailable]` rather than raw text. If
+`ctx.redact_text` is unavailable at registration, **no hooks are registered at all** (fail
+closed). Bodies are also capped at 256 KiB with a visible truncation marker. Verified
+end-to-end through Hermes' real hook dispatch with an `sk-` shaped credential: the raw key
+does not reach the `.state` file. The plugin records what the hooks actually deliver, which
+is the sanitized/size-capped view described above -- not a raw provider payload.
 
 ## 8. `cold_limit` rollover
 
@@ -265,6 +287,25 @@ and 8-thread concurrent appends still produce a clean 1..400 sequence.
 | mypy / PERF401 / CI | the two `fcntl = None` errors fixed; `_flush` uses `list.extend`; mypy and `ruff --select B,S,SIM,C4,PERF` added to CI |
 | Test gaps | the differential `Build()` port and the corrupt-input, `enabled`, step-`upto` and concurrency probes are now committed tests |
 
-**Still open:** only F8's real plugin-host/multiplex execution (needs step 3's hook wiring to
-exercise), plus the design decision on whether `read_records` should default to tolerating a torn
-tail rather than requiring the opt-in flag. No other review finding remains unaddressed.
+### Step 3 (hook mirroring)
+
+`recording.py` + five hooks in `plugin.yaml`. Opt-in enforced at the top of every hook:
+`Registry(self._data_dir()).is_tagged(session_id)` -- untagged sessions create no files and
+write no records. `data_dir()` resolves `plugin_data_dir()` on **every call** (F8, no caching
+across profile switches). `step` records carry the `upto` captured at prompt-build time (F6).
+Hook failures are logged and swallowed, so a plugin can never break a session.
+
+Verified: `hermes plugins doctor --ci` reports **5 hooks / 0 tools**; `hermes plugins
+validate` passes incl. security scan; a real `HERMES_HOME` with the plugin installed and
+enabled fired `pre_llm_call` / `post_tool_call` / `post_llm_call` / `on_session_reset`
+through Hermes' own `invoke_hook` and produced
+`['start','message','call','result','text','step','system']` with a sane `build_context()`
+rebuild and real redaction of an `sk-` key.
+
+**Still open:**
+- **F8's last mile** -- executing the hooks inside the live plugin-host child under
+  `plugins.isolation: host` / multiplex profiles. `doctor` and `validate` confirm
+  registration under host isolation, and in-process dispatch is fully verified, but an
+  ad-hoc probe cannot launch the PM-managed host child. Needs a live gateway session.
+- The design decision on whether `read_records` should default to tolerating a torn tail.
+- Step 4's cache-field measurement (the endpoint to measure against must be supplied).

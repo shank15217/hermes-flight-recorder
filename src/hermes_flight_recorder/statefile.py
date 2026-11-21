@@ -20,6 +20,7 @@ import os
 import threading
 from collections import OrderedDict
 from pathlib import Path
+from typing import BinaryIO, cast
 
 try:  # advisory lock is POSIX-only; Windows falls back to unlocked appends
     import fcntl
@@ -113,19 +114,21 @@ class StateFile:
         fh.seek(self._offset)
         self._fh = fh
 
-    def _ensure(self) -> None:
+    def _ensure(self) -> BinaryIO:
+        """Return the open handle, resyncing or reopening it when necessary."""
         if self._fh is None:
             if self._opened:
                 self._reopen()
             else:
                 self._resync()
-            return
-        try:
-            if os.fstat(self._fh.fileno()).st_size == self._offset:
-                return
-        except OSError:
-            pass
-        self._resync()  # another writer changed the file under us
+        else:
+            try:
+                if os.fstat(self._fh.fileno()).st_size == self._offset:
+                    return self._fh
+            except OSError:
+                pass
+            self._resync()  # another writer changed the file under us
+        return cast("BinaryIO", self._fh)
 
     def append(self, kind: str, body=b"", *, id: str | None = None,
                step: str = "", upto: int | None = None,
@@ -148,8 +151,7 @@ class StateFile:
         raw = _as_body(body)
         with self._lock:
             for _attempt in range(3):
-                self._ensure()
-                fh = self._fh
+                fh = self._ensure()
                 _lock(fh)
                 try:
                     if os.fstat(fh.fileno()).st_size != self._offset:

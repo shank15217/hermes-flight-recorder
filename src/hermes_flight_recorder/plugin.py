@@ -1,8 +1,8 @@
-"""Hermes plugin entry point (roadmap step 2).
+"""Hermes plugin entry point (roadmap step 3).
 
-Registers exactly one slash command, ``/statefile``. No hooks and no tools are
-registered yet: mirroring a live session into the statefile is step 3, so an
-installed plugin cannot affect an untagged session's turns today.
+Registers the ``/statefile`` command plus five observer hooks. Hooks are inert
+for untagged sessions. If ``ctx.redact_text`` is unavailable the hooks are NOT
+registered at all: recording unredacted transcript text would violate F7.
 """
 
 from __future__ import annotations
@@ -10,16 +10,22 @@ from __future__ import annotations
 PLUGIN_ID = "hermes-flight-recorder"
 COMMAND_NAME = "statefile"
 
+HOOK_NAMES = (
+    "pre_llm_call",
+    "post_tool_call",
+    "post_llm_call",
+    "on_session_reset",
+    "post_compaction",
+)
+
 
 def register(ctx):
-    """Register only ``/statefile``. Kept small so loading cannot break a chat."""
+    """Wire the command and (only if redaction is available) the hooks."""
 
-    def _handler(raw_args: str, *, session_id: str = "", session_key: str = "",
+    def _command(raw_args: str, *, session_id: str = "", session_key: str = "",
                  platform: str = "", source=None) -> str:
-        # A slash-command handler runs in the gateway. Resolve the data root on
-        # EVERY call: plugin_data_dir() follows the active profile and must not
-        # be cached across profile switches. Any failure becomes a reply, never
-        # an exception that could take down the session.
+        # A slash-command boundary is the one place a blind catch is correct:
+        # any failure must become a chat reply, never a broken session.
         try:
             from plugins.plugin_storage import plugin_data_dir
 
@@ -29,14 +35,37 @@ def register(ctx):
             registry = Registry(plugin_data_dir(PLUGIN_ID))
             return handle_statefile(raw_args, session_id=session_id,
                                     registry=registry)
-        # A slash-command boundary is the one place a blind catch is correct:
-        # any failure must become a chat reply, never a broken session.
         except Exception as exc:  # noqa: BLE001
             return f"/statefile: error: {type(exc).__name__}: {exc}"
 
     ctx.register_command(
         COMMAND_NAME,
-        handler=_handler,
+        handler=_command,
         description="Opt in to Mainplane-style append-only statefile recording for this session",
         args_hint="on|off|status",
     )
+
+    try:
+        redact = ctx.redact_text
+    except AttributeError:
+        redact = None
+    if redact is None:
+        # Fail closed: F7 is a hard gate. No hooks means no unredacted writes.
+        return
+
+    def data_dir():
+        from plugins.plugin_storage import plugin_data_dir
+        return plugin_data_dir(PLUGIN_ID)
+
+    from .recording import Recorder
+
+    recorder = Recorder(data_dir, redact)
+    handlers = {
+        "pre_llm_call": recorder.on_pre_llm,
+        "post_tool_call": recorder.on_post_tool,
+        "post_llm_call": recorder.on_post_llm,
+        "on_session_reset": recorder.on_reset,
+        "post_compaction": recorder.on_compaction,
+    }
+    for name in HOOK_NAMES:
+        ctx.register_hook(name, handlers[name])
