@@ -139,3 +139,29 @@ def test_entry_roundtrips_through_dict():
     e = SessionEntry(session_id="s", chain=("s", "s2"), parent="p",
                      instructions="be brief")
     assert SessionEntry.from_dict(e.to_dict()) == e
+
+
+def test_stored_statefile_path_is_never_trusted(tmp_path):
+    r = make_reg(tmp_path)
+    safe = r.tag("s1").statefile
+    outside = str(tmp_path / "ESCAPED.state")
+    d = json.loads(r.path.read_text())
+    d["sessions"]["s1"]["statefile"] = outside
+    r.path.write_text(json.dumps(d))
+
+    got = r.get("s1")
+    assert got.statefile == safe
+    assert got.statefile != outside
+    assert all(e.statefile == safe for e in r.tagged())
+
+    r.statefile("s1").append("message", b"x")
+    assert not os.path.exists(outside), "a tampered path must never be written to"
+    assert os.path.isfile(safe)
+
+
+def test_statefile_returns_none_for_disabled_or_unknown(tmp_path):
+    r = make_reg(tmp_path)
+    assert r.statefile("nope") is None
+    r.tag("s1")
+    r.untag("s1")
+    assert r.statefile("s1") is None

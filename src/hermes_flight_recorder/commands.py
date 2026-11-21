@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from .records import RecordFormatError
 from .registry import TAGGED_SESSION_TYPE, Registry, RegistryError
-from .statefile import StateFile
+from .statefile import get_statefile
 
 USAGE = (
     "/statefile on      enable Mainplane-style statefile recording for this session\n"
@@ -27,7 +27,7 @@ def _describe(registry: Registry, session_id: str) -> str:
     if entry is None or not entry.enabled:
         return (f"/statefile: session {session_id} is not enabled "
                 f"(type={TAGGED_SESSION_TYPE} recording off).")
-    sf = StateFile(entry.statefile)
+    sf = get_statefile(entry.statefile)
     try:
         records = sf.read()
     except (RecordFormatError, OSError) as exc:

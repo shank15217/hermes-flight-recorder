@@ -20,6 +20,9 @@ by". **No code in this repository is copied from Mainplane.**
 | Hot-reloadable instructions | `docs/self-hosting.md`: agent `instructions` ≤4 KiB read by every session, change makes no new session | planned (v0.2+) |
 | Tiny tool surface | `pkg/harness/tools.go`: `run, read, write, edit` (or `run, read, patch`); everything else is code the model writes | we keep Hermes' tools and add no model-facing tools at all |
 | Skills as capability files | `docs/self-hosting.md` "Agents and apps": `apps/<name>/skill.md` + `app.json` | a bundled Hermes skill that explains `/statefile` |
+| O(1) append via an open handle | `pkg/statefile/file.go` `File{f, n}` + `Append()`: "One writer per file"; `pkg/harness/session.go`: "A step holds the file open for its whole run, so a message posted mid-step appends to the same handle" | `statefile.py`: process-wide LRU of open `StateFile` handles caching `n` + byte offset; `append_record` is a single write, one `scan_records` on first open |
+| Path derived from the session id | `pkg/statefile/session.go` `Sessions.Path(id)` — "The filesystem is the registry": `<dir>/<id>.state`, never a stored path | `registry.py`: `_statefile_path()` derives and containment-checks; a stored `statefile` value is ignored |
+| Torn-tail recovery on open | `pkg/statefile/record.go` `ErrTorn` / `Decode()` ("EOF anywhere inside a record is ErrTorn"); `pkg/statefile/file.go` `scan()` returns `good` offset and `Open()` calls `f.Truncate(good)` | `records.py` `scan_records()` + `read_records(tolerate_torn_tail=True)`; `statefile.py` truncates a torn tail before appending |
 
 ## What we deliberately do NOT take
 

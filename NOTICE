@@ -23,6 +23,15 @@ Ideas attributed to Mainplane (see docs/prior-art.md for the source-level mappin
     context it needs.
   * A deliberately restricted tool surface, with skill files as the capability extension
     point.
+  * One open file handle plus a cached last-record number per session, held in memory for the
+    whole run, so appending a record is O(1) rather than a rescan of the log
+    (`pkg/statefile/file.go` `File` / `Append`, `pkg/harness/session.go` `session.f`:
+    "a cache of the file, never the other way round").
+  * Statefile locations derived from the session id rather than stored as redirectable data —
+    "The filesystem is the registry" (`pkg/statefile/session.go` `Sessions.Path`).
+  * A torn final record is dropped and the file truncated back to the last whole record on
+    open (`pkg/statefile/record.go` `ErrTorn` / `Decode`, `pkg/statefile/file.go` `scan` /
+    `Open`).
 
 No source code from Mainplane is incorporated into this project. Mainplane is written in Go;
 this project is original Python built on Hermes Agent's public plugin API. Both projects are

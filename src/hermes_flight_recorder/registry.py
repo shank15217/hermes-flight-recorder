@@ -25,8 +25,8 @@ try:  # advisory lock is POSIX-only; Windows falls back to unlocked writes
 except ImportError:  # pragma: no cover - platform dependent
     fcntl = None
 
-from .records import append_record, new_id
-from .statefile import StateFile
+from .records import new_id
+from .statefile import StateFile, append_record, get_statefile
 
 # One owner for this fact: re-exported from the package facade.
 TAGGED_SESSION_TYPE = "mainplane"
@@ -123,6 +123,22 @@ class Registry:
             os.chmod(self.data_dir, 0o700)
             os.chmod(self.sessions_dir, 0o700)
 
+    def _statefile_path(self, session_id: str) -> Path:
+        """Derive the statefile from the id; never trust a stored path.
+
+        Mainplane's ``Sessions.Path(id)`` calls "the filesystem is the
+        registry": a statefile's location is a function of its id, not data
+        that a hand-edited registry can redirect.
+        """
+        p = self.sessions_dir / _statefile_name(session_id)
+        if not p.resolve().is_relative_to(self.sessions_dir.resolve()):
+            raise RegistryError("statefile path escapes the sessions directory")
+        return p
+
+    def _bind(self, entry: SessionEntry) -> SessionEntry:
+        """Overwrite any stored statefile with the derived, contained one."""
+        return replace(entry, statefile=str(self._statefile_path(entry.session_id)))
+
     @contextmanager
     def _lock(self):
         self._ensure_dirs()
@@ -173,7 +189,7 @@ class Registry:
             return None
         with self._lock():
             raw = self._load()["sessions"].get(session_id)
-        return SessionEntry.from_dict(raw) if raw is not None else None
+        return self._bind(SessionEntry.from_dict(raw)) if raw is not None else None
 
     def is_tagged(self, session_id: str) -> bool:
         entry = self.get(session_id)
@@ -184,7 +200,7 @@ class Registry:
             return []
         with self._lock():
             sessions = self._load()["sessions"]
-        entries = [SessionEntry.from_dict(v) for v in sessions.values()]
+        entries = [self._bind(SessionEntry.from_dict(v)) for v in sessions.values()]
         return sorted((e for e in entries if e.enabled),
                       key=lambda e: e.created_at)
 
@@ -197,13 +213,13 @@ class Registry:
             data = self._load()
             raw = data["sessions"].get(session_id)
             if raw is not None:
-                entry = SessionEntry.from_dict(raw)
+                entry = self._bind(SessionEntry.from_dict(raw))
                 if not entry.enabled:
                     entry = replace(entry, enabled=True)
                     data["sessions"][session_id] = entry.to_dict()
                     self._save(data)
                 return entry
-            sf_path = self.sessions_dir / _statefile_name(session_id)
+            sf_path = self._statefile_path(session_id)
             entry = SessionEntry(
                 session_id=session_id,
                 statefile=str(sf_path),
@@ -240,4 +256,6 @@ class Registry:
 
     def statefile(self, session_id: str) -> StateFile | None:
         entry = self.get(session_id)
-        return StateFile(entry.statefile) if entry is not None else None
+        if entry is None or not entry.enabled:
+            return None
+        return get_statefile(entry.statefile)

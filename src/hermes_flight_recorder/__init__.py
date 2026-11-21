@@ -8,7 +8,7 @@ command, no hooks, no tools.
 Design and attribution: see README, NOTICE and docs/design.md.
 """
 
-__version__ = "0.2.0.dev1"
+__version__ = "0.2.0.dev2"
 
 from .commands import USAGE, handle_statefile
 from .records import (
@@ -17,10 +17,10 @@ from .records import (
     KINDS,
     Record,
     RecordFormatError,
-    append_record,
     build_context,
     new_id,
     read_records,
+    scan_records,
 )
 from .registry import (
     DEFAULT_COLD_LIMIT,
@@ -31,7 +31,7 @@ from .registry import (
     RegistryError,
     SessionEntry,
 )
-from .statefile import StateFile
+from .statefile import StateFile, append_record, get_statefile
 
 __all__ = [
     "BLOCK_KINDS",
@@ -51,7 +51,9 @@ __all__ = [
     "__version__",
     "append_record",
     "build_context",
+    "get_statefile",
     "handle_statefile",
     "new_id",
     "read_records",
+    "scan_records",
 ]

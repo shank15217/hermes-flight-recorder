@@ -5,24 +5,19 @@ One record = one JSON header line + a body of exactly ``header["len"]`` bytes
 an upstream shape is uncertain, keep the bytes" (Mainplane AGENTS.md; credited
 in NOTICE). File order is time order; :func:`build_context` rebuilds API order.
 
-This module is a standalone library. It knows nothing about Hermes, sessions,
-or plugins -- that wiring is a later roadmap step.
+This module is pure format + parsing. Opening a file for appending, keeping
+its handle and its last record number in memory, is :mod:`statefile`'s job --
+that is what makes an append O(1) instead of a full rescan.
 """
 
 from __future__ import annotations
 
 import json
-import os
 import uuid
 from collections.abc import Iterable, Iterator
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
-
-try:  # advisory lock is POSIX-only; Windows falls back to unlocked appends
-    import fcntl
-except ImportError:  # pragma: no cover - platform dependent
-    fcntl = None
 
 # Record kinds. ``start``, ``config`` and ``name`` are metadata and never enter
 # rebuilt context. The rest deliberately mirror the upstream vocabulary so the
@@ -46,7 +41,7 @@ def new_id() -> str:
     return uuid.uuid4().hex[:16]
 
 
-def _now() -> str:
+def utc_now() -> str:
     return datetime.now(UTC).isoformat(timespec="seconds")
 
 
@@ -108,7 +103,7 @@ class Record:
         )
 
 
-def _encode(rec: Record) -> bytes:
+def encode_record(rec: Record) -> bytes:
     line = json.dumps(rec.to_header(), separators=(",", ":"),
                       ensure_ascii=False).encode("utf-8")
     # A newline terminates the header; a second one terminates the body. The
@@ -117,114 +112,102 @@ def _encode(rec: Record) -> bytes:
     return line + b"\n" + rec.body + b"\n"
 
 
-def _iter_fp(f) -> Iterator[Record]:
+def _decode_one(f, *, tolerate_torn: bool = False) -> Record | None:
+    """Decode one record; return None at EOF or on a torn final record.
+
+    Mirrors Mainplane's ``Decode``: EOF *inside* a record is a torn tail,
+    while a malformed header is corruption and always raises.
+    """
+    line = f.readline()
+    if line == b"":
+        return None
+    if not line.endswith(b"\n"):
+        if tolerate_torn:
+            return None
+        raise RecordFormatError("truncated header line: no terminating newline")
+    try:
+        header = json.loads(line[:-1].decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise RecordFormatError(f"invalid header JSON: {exc}") from exc
+    if not isinstance(header, dict):
+        raise RecordFormatError("header is not a JSON object")
+    for key in ("n", "kind", "len"):
+        if key not in header:
+            raise RecordFormatError(f"header missing {key!r}")
+    length = header["len"]
+    if not isinstance(length, int) or isinstance(length, bool) or length < 0:
+        raise RecordFormatError(f"invalid body length: {length!r}")
+    body = f.read(length)
+    if len(body) != length:
+        if tolerate_torn:
+            return None
+        raise RecordFormatError(
+            f"truncated body: expected {length} bytes, got {len(body)}")
+    if f.read(1) != b"\n":
+        if tolerate_torn:
+            return None
+        raise RecordFormatError("missing body terminator after raw body")
+    return Record.from_header(header, body)
+
+
+def iter_records(f, *, tolerate_torn: bool = False) -> Iterator[Record]:
     """Yield records from an open binary file object, in file (time) order."""
     while True:
-        line = f.readline()
-        if line == b"":
+        rec = _decode_one(f, tolerate_torn=tolerate_torn)
+        if rec is None:
             return
-        if not line.endswith(b"\n"):
-            raise RecordFormatError("truncated header line: no terminating newline")
-        try:
-            header = json.loads(line[:-1].decode("utf-8"))
-        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-            raise RecordFormatError(f"invalid header JSON: {exc}") from exc
-        if not isinstance(header, dict):
-            raise RecordFormatError("header is not a JSON object")
-        for key in ("n", "kind", "len"):
-            if key not in header:
-                raise RecordFormatError(f"header missing {key!r}")
-        length = header["len"]
-        if not isinstance(length, int) or isinstance(length, bool) or length < 0:
-            raise RecordFormatError(f"invalid body length: {length!r}")
-        body = f.read(length)
-        if len(body) != length:
+        yield rec
+
+
+def _check_monotonic(records: list[Record]) -> None:
+    for expected, rec in enumerate(records, start=1):
+        if rec.n != expected:
             raise RecordFormatError(
-                f"truncated body: expected {length} bytes, got {len(body)}")
-        if f.read(1) != b"\n":
-            raise RecordFormatError("missing body terminator after raw body")
-        yield Record.from_header(header, body)
+                f"non-monotonic record numbers: expected n={expected}, got {rec.n}")
 
 
-def _lock(f) -> None:
-    if fcntl is not None:
-        fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+def scan_records(path) -> tuple[list[Record], int]:
+    """Scan a file ONCE. Return ``(whole_records, good_offset)``.
+
+    ``good_offset`` is the byte offset where the first torn tail begins. A torn
+    *final* record is dropped rather than raised -- Mainplane ``file.go``'s
+    ``scan`` / ``Open`` behaviour. Corruption in the middle still raises.
+    """
+    p = Path(path)
+    if not p.exists():
+        return [], 0
+    records: list[Record] = []
+    good = 0
+    with p.open("rb") as f:
+        while True:
+            rec = _decode_one(f, tolerate_torn=True)
+            if rec is None:
+                return records, good
+            records.append(rec)
+            good = f.tell()
+    return records, good
 
 
-def _unlock(f) -> None:
-    if fcntl is not None:
-        fcntl.flock(f.fileno(), fcntl.LOCK_UN)
-
-
-def _as_body(body) -> bytes:
-    if isinstance(body, bytes):
-        return body
-    if isinstance(body, str):
-        return body.encode("utf-8")
-    return bytes(body)
-
-
-def read_records(path, *, strict: bool = True) -> list[Record]:
+def read_records(path, *, strict: bool = True,
+                 tolerate_torn_tail: bool = False) -> list[Record]:
     """Read a statefile completely. A missing file is an empty chain.
 
     With ``strict`` (default) the ``n`` sequence must be 1, 2, 3, ...; a gap or
-    a duplicate is corruption, not something to paper over.
+    a duplicate is corruption, not something to paper over. With
+    ``tolerate_torn_tail`` a partially-written final record is dropped (see
+    :func:`scan_records`); the default keeps the strict contract.
     """
     p = Path(path)
     if not p.exists():
         return []
-    with p.open("rb") as f:
-        records = list(_iter_fp(f))
+    if tolerate_torn_tail:
+        records, _ = scan_records(p)
+    else:
+        with p.open("rb") as f:
+            records = list(iter_records(f))
     if strict:
-        for expected, rec in enumerate(records, start=1):
-            if rec.n != expected:
-                raise RecordFormatError(
-                    f"non-monotonic record numbers: expected n={expected}, got {rec.n}")
+        _check_monotonic(records)
     return records
-
-
-def append_record(path, kind: str, body=b"", *, id: str | None = None,
-                  step: str = "", upto: int | None = None,
-                  ts: str | None = None, **extra) -> Record:
-    """Append one record under an exclusive lock and fsync it.
-
-    ``upto`` defaults to the last record number in the file, which is what a
-    step record wants: the highest ``n`` visible when that step was built.
-    The file is created 0600 because it holds transcripts and tool output.
-    """
-    if kind not in KINDS:
-        raise ValueError(f"unknown record kind: {kind!r}")
-    raw = _as_body(body)
-    p = Path(path)
-    p.parent.mkdir(parents=True, exist_ok=True)
-    with p.open("a+b") as f:  # append mode: writes always land at the end
-        _lock(f)
-        try:
-            f.seek(0)
-            last = 0
-            for expected, rec in enumerate(_iter_fp(f), start=1):
-                if rec.n != expected:
-                    raise RecordFormatError(
-                        f"non-monotonic record numbers: expected n={expected}, got {rec.n}")
-                last = rec.n
-            rec = Record(
-                n=last + 1,
-                kind=kind,
-                body=raw,
-                id=id or new_id(),
-                step=step,
-                upto=last if upto is None else int(upto),
-                ts=ts or _now(),
-                extra=extra,
-            )
-            f.seek(0, os.SEEK_END)
-            f.write(_encode(rec))
-            f.flush()
-            os.fsync(f.fileno())
-        finally:
-            _unlock(f)
-    os.chmod(p, 0o600)
-    return rec
 
 
 def _flush(pending: list[Record], step: Record | None,
@@ -235,7 +218,7 @@ def _flush(pending: list[Record], step: Record | None,
     with ``n > step.upto`` is carried forward to the next step. With no step
     (end of chain) everything pending is emitted, results first.
     """
-    seen = (lambda r: True) if step is None else (lambda r: r.n <= step.upto)
+    seen = (lambda _r: True) if step is None else (lambda r: r.n <= step.upto)
     rest: list[Record] = []
     for r in pending:
         if not seen(r):
@@ -276,5 +259,5 @@ def build_context(records: Iterable[Record]) -> tuple[list[Record], int]:
             ctx.append(r)
         else:
             pending.append(r)
-    pending = _flush(pending, None, ctx)
+    _flush(pending, None, ctx)
     return ctx, chain[-1].n

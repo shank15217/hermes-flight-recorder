@@ -97,6 +97,10 @@ file with one `start` record; a later `on` after `off` resumes the same file and
 args_hint)`. The handler resolves `plugin_data_dir("hermes-flight-recorder")` on **every call**
 (it follows the active profile and must not be cached) and always returns text. With no
 `session_id` it fails closed. **No hooks and no tools are registered at this step.**
+The `statefile` field in `registry.json` is **display data only**: F2 of the code review showed a
+tampered stored path could redirect transcript writes outside `sessions/`. `Registry._statefile_path()`
+now derives the location from the session id and checks containment, and `_bind()` overwrites the
+stored value on every read — Mainplane's "The filesystem is the registry" (`Sessions.Path(id)`).
 
 ## 5. Record format
 
@@ -125,6 +129,14 @@ guessed parse loses information. Usage is recorded per `step`:
 in the chain when that step's prompt was built (upstream: `hdr.Upto = upto`), so results
 appended after the step are not attributed to it — they are seen by the *next* step. That is
 why `Build()` defers records with `n > step.upto` rather than dropping them.
+
+**Append cost (F1).** The first implementation re-read the whole file on every append — O(n²),
+worse than the compaction this project is meant to avoid. `statefile.py` now keeps one open
+handle per statefile, cached process-wide in an LRU, with `n` and the byte offset in memory;
+`append_record` is a single seek+write+fsync. Rebuilding context re-reads the file (as Mainplane's
+`Sessions.Load` does), once per rebuild rather than once per append. A torn final record is dropped
+and truncated on open, mirroring `ErrTorn` / `Open`; `read_records(tolerate_torn_tail=True)` offers
+the same behaviour to direct callers, while the default stays strict.
 
 ## 6. Context rebuild (`Build`)
 
@@ -206,3 +218,28 @@ automatic rollover deferred to v0.2 pending testing on real sessions.
 All state under `plugin_data_dir()` (follows the active Hermes profile). Files mode 0600,
 directory 0700, fsync on flush. `.state` files and `registry.json` are gitignored. No egress.
 Deleting a tagged session archives its `.state` rather than dropping it.
+
+## 12. Review resolution (pre-step-3 gate)
+
+A comprehensive review at `3922f4f` found the append path was O(n²) — 1.619 s / 4.052 s /
+13.651 s for 400 / 800 / 1600 appends — which would cost more than the compaction the project
+exists to avoid. Re-reading Mainplane's `pkg/statefile/file.go`, `pkg/harness/session.go` and
+`pkg/statefile/session.go` showed the intended shape: one open handle + cached `n`, held for the run.
+
+Resolved in this pass:
+
+| Finding | Resolution |
+| --- | --- |
+| F1 O(n²) append | `statefile.py`: process-wide LRU of open handles caching `n` + byte offset; O(1) append. Same benchmark is now 0.661 s / 1.327 s / 2.925 s / 5.993 s for 400 / 800 / 1600 / 3200 appends (~1.7-1.9 ms each, flat) |
+| F2 registry path traversal | `_statefile_path()` derives from the session id, containment-checked; stored `statefile` ignored on every read |
+| F5 torn final write (came with Mainplane's `Open`) | `scan_records()` drops a torn tail; `statefile.py` truncates it on open; `read_records(tolerate_torn_tail=True)` for direct callers; default stays strict |
+
+Regression tests live in `tests/test_statefile.py` and `tests/test_registry.py`. `build_context`
+still matches a literal port of Mainplane's Go `Build()` on 3,000 randomized chains (0 mismatches),
+and 8-thread concurrent appends still produce a clean 1..400 sequence.
+
+Still open, deliberately deferred: F3 (corrupt inputs leak `ValueError`/`TypeError`), F4
+(`bool("false")` re-enables a disabled session), F6 (`upto` must be captured at prompt-build time,
+not append time), F7 (`ctx.redact_text()` and the fact that hook payloads are sanitized/size-capped),
+F8 (handler not yet executed inside the real plugin host under multiplex profiles), plus the
+type-checking and CI suggestions from the review.
